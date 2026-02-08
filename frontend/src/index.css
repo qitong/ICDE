@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+/* ICDE Design System - Custom Theme */
+@theme {
+  /* Colors */
+  --color-primary: #E42313;
+  --color-primary-hover: #C91F10;
+  --color-foreground: #0D0D0D;
+  --color-muted: #7A7A7A;
+  --color-border: #E8E8E8;
+  --color-surface: #FAFAFA;
+  --color-background: #FFFFFF;
+  --color-success: #22C55E;
+  --color-success-hover: #16A34A;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+
+  /* Fonts */
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+
+  /* Font weights */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Spacing (layout dimensions) */
+  --spacing-sidebar: 200px;
+  --spacing-chat-panel: 360px;
+  --spacing-header: 52px;
+  --spacing-tab-bar: 44px;
+  --spacing-export-bar: 60px;
+
+  /* Border radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+/* Base styles */
+html {
+  font-family: var(--font-body);
+  color: var(--color-foreground);
+  background-color: var(--color-background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
+
+/* Selection styling */
+::selection {
+  background-color: rgba(228, 35, 19, 0.15);
+  color: var(--color-foreground);
+}
+
+/* Focus styling */
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Animation keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Utility classes */
+.animate-fade-in {
+  animation: fadeIn 200ms ease-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 300ms ease-out;
+}
+
+.animate-pulse {
+  animation: pulse 2s infinite;
+}
