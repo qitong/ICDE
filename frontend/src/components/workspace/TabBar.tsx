@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { BarChart3, Table2, FileText, Code } from 'lucide-react';
 import type { TabType } from '../../types';
 import { useApp } from '../../contexts/AppContext';

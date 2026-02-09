@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { Bot, User, AlertCircle } from 'lucide-react';
 import type { Message } from '../../types';
 

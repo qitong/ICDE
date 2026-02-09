@@ -6,6 +6,9 @@ from datetime import datetime
 class DatasetCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
+    parent_dataset_id: Optional[str] = None
+    crf_version: Optional[str] = None
+    patient_id_column: Optional[str] = None
 
 
 class ColumnInfo(BaseModel):
@@ -36,14 +39,49 @@ class DatasetResponse(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
+    type: Optional[str] = "RAW"
     file_count: int
     total_size: int
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
     files: List[DatasetFileResponse] = []
+    parent_dataset_id: Optional[str] = None
+    source_dataset_id: Optional[str] = None
+    script_id: Optional[str] = None
+    crf_version: Optional[str] = None
+    patient_id_column: Optional[str] = None
+    is_stale: bool = False
+    stale_reason: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+    @classmethod
+    def from_orm_with_type(cls, obj):
+        """Convert ORM model to response, handling enum type."""
+        data = {
+            "id": obj.id,
+            "name": obj.name,
+            "description": obj.description,
+            "type": obj.type.value if obj.type else "RAW",
+            "file_count": obj.file_count,
+            "total_size": obj.total_size,
+            "row_count": obj.row_count,
+            "column_count": obj.column_count,
+            "files": obj.files,
+            "parent_dataset_id": obj.parent_dataset_id,
+            "source_dataset_id": obj.source_dataset_id,
+            "script_id": obj.script_id,
+            "crf_version": obj.crf_version,
+            "patient_id_column": obj.patient_id_column,
+            "is_stale": obj.is_stale,
+            "stale_reason": obj.stale_reason,
+            "created_at": obj.created_at,
+            "updated_at": obj.updated_at,
+        }
+        return cls(**data)
 
 
 class DatasetListResponse(BaseModel):

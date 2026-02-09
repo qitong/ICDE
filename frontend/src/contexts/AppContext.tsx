@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react';
-import type { AppState, AppAction, FileNode, Message, TabType, CanvasContent, AnalysisStatus, Dataset } from '../types';
+import { createContext, useContext, useReducer, useEffect } from 'react';
+import type { ReactNode } from 'react';
+import type { AppState, AppAction, FileNode, Message, TabType } from '../types';
 import { api } from '../services/api';
 
 // Mock data for demonstration

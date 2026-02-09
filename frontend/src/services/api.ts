@@ -1,10 +1,21 @@
-import type { Dataset, DatasetFile, FilePreview } from '../types';
+import type {
+  Dataset,
+  DatasetFile,
+  FilePreview,
+  Script,
+  ScriptCreate,
+  DeriveDatasetRequest,
+  DatasetLineage,
+} from '../types';
 
 const API_BASE_URL = 'http://localhost:8000';
 
 class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  status: number;
+
+  constructor(status: number, message: string) {
     super(message);
+    this.status = status;
     this.name = 'ApiError';
   }
 }
@@ -26,15 +37,23 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json();
 }
 
+interface CreateDatasetOptions {
+  name: string;
+  description?: string;
+  parent_dataset_id?: string;
+  crf_version?: string;
+  patient_id_column?: string;
+}
+
 export const api = {
   // Datasets
-  async createDataset(name: string, description?: string): Promise<Dataset> {
+  async createDataset(options: CreateDatasetOptions): Promise<Dataset> {
     const response = await fetch(`${API_BASE_URL}/api/datasets`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name, description }),
+      body: JSON.stringify(options),
     });
     return handleResponse<Dataset>(response);
   },
@@ -78,6 +97,83 @@ export const api = {
       `${API_BASE_URL}/api/datasets/${datasetId}/files/${fileId}/preview`
     );
     return handleResponse<FilePreview>(response);
+  },
+
+  // Dataset Versioning
+  async getDatasetVersions(datasetId: string): Promise<Dataset[]> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/datasets/${datasetId}/versions`
+    );
+    return handleResponse<Dataset[]>(response);
+  },
+
+  // Dataset Derivation
+  async deriveDataset(
+    sourceDatasetId: string,
+    request: DeriveDatasetRequest
+  ): Promise<Dataset> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/datasets/${sourceDatasetId}/derive`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      }
+    );
+    return handleResponse<Dataset>(response);
+  },
+
+  async getDerivedDatasets(datasetId: string): Promise<Dataset[]> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/datasets/${datasetId}/derived`
+    );
+    return handleResponse<Dataset[]>(response);
+  },
+
+  // Dataset Lineage
+  async getDatasetLineage(datasetId: string): Promise<DatasetLineage> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/datasets/${datasetId}/lineage`
+    );
+    return handleResponse<DatasetLineage>(response);
+  },
+
+  // Scripts
+  async createScript(script: ScriptCreate): Promise<Script> {
+    const response = await fetch(`${API_BASE_URL}/api/scripts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(script),
+    });
+    return handleResponse<Script>(response);
+  },
+
+  async listScripts(): Promise<Script[]> {
+    const response = await fetch(`${API_BASE_URL}/api/scripts`);
+    return handleResponse<Script[]>(response);
+  },
+
+  async getScript(id: string): Promise<Script> {
+    const response = await fetch(`${API_BASE_URL}/api/scripts/${id}`);
+    return handleResponse<Script>(response);
+  },
+
+  async searchScripts(query: string): Promise<Script[]> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/scripts/search?q=${encodeURIComponent(query)}`
+    );
+    return handleResponse<Script[]>(response);
+  },
+
+  async deleteScript(id: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/scripts/${id}`, {
+      method: 'DELETE',
+    });
+    return handleResponse<void>(response);
   },
 };
 

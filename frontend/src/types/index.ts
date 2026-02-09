@@ -80,13 +80,29 @@ export type AppAction =
 export type ExportFormat = 'word' | 'pdf';
 
 // Dataset Types
+export type DatasetType = 'RAW' | 'DERIVED';
+
 export interface Dataset {
   id: string;
   name: string;
   description: string | null;
+  type: DatasetType;
   file_count: number;
   total_size: number;
+  row_count: number | null;
+  column_count: number | null;
   files?: DatasetFile[];
+  // Version lineage (time dimension)
+  parent_dataset_id: string | null;
+  crf_version: string | null;
+  // Derivation lineage (logic dimension)
+  source_dataset_id: string | null;
+  script_id: string | null;
+  // Patient identifier
+  patient_id_column: string | null;
+  // Stale state
+  is_stale: boolean;
+  stale_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -119,4 +135,61 @@ export interface FilePreview {
   column_count: number;
   columns: ColumnInfo[];
   sample_rows: Record<string, unknown>[];
+}
+
+// Script Types
+export interface Script {
+  id: string;
+  name: string;
+  display_name: string;
+  description: string;
+  code: string;
+  keywords: string[] | null;
+  language: string;
+  input_requirements: string | null;
+  output_description: string | null;
+  created_by: 'user' | 'llm';
+  created_from_prompt: string | null;
+  usage_count: number;
+  last_used_at: string | null;
+  version: number;
+  parent_script_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScriptCreate {
+  name: string;
+  display_name: string;
+  description: string;
+  code: string;
+  keywords?: string[];
+  language?: string;
+  input_requirements?: string;
+  output_description?: string;
+  created_by?: 'user' | 'llm';
+  created_from_prompt?: string;
+}
+
+export interface DeriveDatasetRequest {
+  script_id: string;
+  output_name: string;
+}
+
+// Lineage Types
+export interface LineageNode {
+  id: string;
+  name: string;
+  type: DatasetType;
+  relationship: 'version_parent' | 'version_child' | 'derivation_source' | 'derived';
+}
+
+export interface DatasetLineage {
+  dataset: {
+    id: string;
+    name: string;
+    type: DatasetType;
+  };
+  ancestors: LineageNode[];
+  descendants: LineageNode[];
 }

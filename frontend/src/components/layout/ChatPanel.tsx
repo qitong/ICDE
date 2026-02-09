@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { MessageList } from '../chat/MessageList';
 import { ChatInput } from '../chat/ChatInput';
 import { Bot, Sparkles, Settings } from 'lucide-react';

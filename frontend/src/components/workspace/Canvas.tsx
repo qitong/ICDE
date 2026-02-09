@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { BarChart3, Table2, FileText, Code, MousePointer } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 

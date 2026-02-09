@@ -6,6 +6,12 @@ from .dataset import (
     ColumnInfo,
     FilePreview,
 )
+from .script import (
+    ScriptCreate,
+    ScriptUpdate,
+    ScriptResponse,
+    DeriveDatasetRequest,
+)
 
 __all__ = [
     "DatasetCreate",
@@ -14,4 +20,8 @@ __all__ = [
     "DatasetFileResponse",
     "ColumnInfo",
     "FilePreview",
+    "ScriptCreate",
+    "ScriptUpdate",
+    "ScriptResponse",
+    "DeriveDatasetRequest",
 ]

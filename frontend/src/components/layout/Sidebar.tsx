@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { FileTree } from '../sidebar/FileTree';
 import { Search, Upload, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';

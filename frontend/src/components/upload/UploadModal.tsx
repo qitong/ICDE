@@ -84,7 +84,10 @@ export function UploadModal({ isOpen, onClose, onUploadComplete }: UploadModalPr
 
     try {
       // Create dataset
-      const dataset = await api.createDataset(datasetName.trim(), description.trim() || undefined);
+      const dataset = await api.createDataset({
+        name: datasetName.trim(),
+        description: description.trim() || undefined,
+      });
       setUploadProgress(20);
 
       // Upload files

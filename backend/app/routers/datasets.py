@@ -2,14 +2,15 @@ import os
 import shutil
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from ..config import UPLOAD_DIR, ALLOWED_EXTENSIONS, MAX_FILE_SIZE
 from ..database import get_db
-from ..models.dataset import Dataset, DatasetFile
+from ..models.dataset import Dataset, DatasetFile, DatasetType
+from ..models.script import Script
 from ..schemas.dataset import (
     DatasetCreate,
     DatasetResponse,
@@ -17,7 +18,9 @@ from ..schemas.dataset import (
     DatasetFileResponse,
     FilePreview,
 )
+from ..schemas.script import DeriveDatasetRequest
 from ..services.file_parser import FileParser
+from ..services.script_executor import ScriptExecutor
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -32,6 +35,14 @@ async def create_dataset(
     folder_path = UPLOAD_DIR / dataset_id
     folder_path.mkdir(parents=True, exist_ok=True)
 
+    # Determine type based on parent_dataset_id
+    dataset_type = DatasetType.RAW
+    if dataset_in.parent_dataset_id:
+        # Validate parent exists
+        parent = db.query(Dataset).filter(Dataset.id == dataset_in.parent_dataset_id).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent dataset not found")
+
     dataset = Dataset(
         id=dataset_id,
         name=dataset_in.name,
@@ -39,6 +50,10 @@ async def create_dataset(
         folder_path=str(folder_path),
         file_count=0,
         total_size=0,
+        type=dataset_type,
+        parent_dataset_id=dataset_in.parent_dataset_id,
+        crf_version=dataset_in.crf_version,
+        patient_id_column=dataset_in.patient_id_column or "SUBJID",
     )
 
     db.add(dataset)
@@ -191,3 +206,163 @@ async def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
     db.commit()
 
     return None
+
+
+@router.get("/{dataset_id}/versions", response_model=List[DatasetResponse])
+async def get_dataset_versions(dataset_id: str, db: Session = Depends(get_db)):
+    """Get version history of a dataset (all versions in the same lineage)."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Find all versions in the chain
+    versions = []
+
+    # Go up to find the root
+    root = dataset
+    while root.parent_dataset_id:
+        parent = db.query(Dataset).filter(Dataset.id == root.parent_dataset_id).first()
+        if not parent:
+            break
+        root = parent
+
+    # Collect all descendants from root
+    def collect_descendants(node):
+        versions.append(node)
+        children = db.query(Dataset).filter(Dataset.parent_dataset_id == node.id).all()
+        for child in children:
+            collect_descendants(child)
+
+    collect_descendants(root)
+
+    return versions
+
+
+@router.post("/{dataset_id}/derive", response_model=DatasetResponse, status_code=201)
+async def derive_dataset(
+    dataset_id: str,
+    derive_request: DeriveDatasetRequest,
+    db: Session = Depends(get_db),
+):
+    """Create a derived dataset by applying a script."""
+    # Get source dataset
+    source = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source dataset not found")
+
+    # Get script
+    script = db.query(Script).filter(Script.id == derive_request.script_id).first()
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    # Execute script and save result
+    executor = ScriptExecutor()
+    result = executor.execute_and_save(
+        script=script,
+        source_dataset=source,
+        output_name=derive_request.output_name,
+        output_dir=UPLOAD_DIR,
+        db=db,
+    )
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    return result.dataset
+
+
+@router.get("/{dataset_id}/derived", response_model=List[DatasetResponse])
+async def get_derived_datasets(dataset_id: str, db: Session = Depends(get_db)):
+    """Get all datasets derived from this source."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    derived = db.query(Dataset).filter(Dataset.source_dataset_id == dataset_id).all()
+    return derived
+
+
+@router.get("/{dataset_id}/lineage")
+async def get_dataset_lineage(dataset_id: str, db: Session = Depends(get_db)):
+    """Get full lineage of a dataset (ancestors and descendants)."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Find ancestors (both version parents and derivation sources)
+    ancestors = []
+    visited = set()
+
+    def find_ancestors(node):
+        if node.id in visited:
+            return
+        visited.add(node.id)
+
+        # Version parent
+        if node.parent_dataset_id:
+            parent = db.query(Dataset).filter(Dataset.id == node.parent_dataset_id).first()
+            if parent:
+                ancestors.append({
+                    "id": parent.id,
+                    "name": parent.name,
+                    "type": parent.type.value if parent.type else "RAW",
+                    "relationship": "version_parent"
+                })
+                find_ancestors(parent)
+
+        # Derivation source
+        if node.source_dataset_id:
+            source = db.query(Dataset).filter(Dataset.id == node.source_dataset_id).first()
+            if source:
+                ancestors.append({
+                    "id": source.id,
+                    "name": source.name,
+                    "type": source.type.value if source.type else "RAW",
+                    "relationship": "derivation_source"
+                })
+                find_ancestors(source)
+
+    find_ancestors(dataset)
+
+    # Find descendants (both version children and derived datasets)
+    descendants = []
+    visited.clear()
+
+    def find_descendants(node):
+        if node.id in visited:
+            return
+        visited.add(node.id)
+
+        # Version children
+        version_children = db.query(Dataset).filter(Dataset.parent_dataset_id == node.id).all()
+        for child in version_children:
+            descendants.append({
+                "id": child.id,
+                "name": child.name,
+                "type": child.type.value if child.type else "RAW",
+                "relationship": "version_child"
+            })
+            find_descendants(child)
+
+        # Derived datasets
+        derived = db.query(Dataset).filter(Dataset.source_dataset_id == node.id).all()
+        for d in derived:
+            descendants.append({
+                "id": d.id,
+                "name": d.name,
+                "type": d.type.value if d.type else "DERIVED",
+                "relationship": "derived"
+            })
+            find_descendants(d)
+
+    find_descendants(dataset)
+
+    return {
+        "dataset": {
+            "id": dataset.id,
+            "name": dataset.name,
+            "type": dataset.type.value if dataset.type else "RAW"
+        },
+        "ancestors": ancestors,
+        "descendants": descendants
+    }

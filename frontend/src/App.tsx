@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
 import { Sidebar, MainWorkspace, ChatPanel } from './components/layout';
 import { UploadModal } from './components/upload';
 import { Database, ChevronDown, Bell, HelpCircle, User } from 'lucide-react';

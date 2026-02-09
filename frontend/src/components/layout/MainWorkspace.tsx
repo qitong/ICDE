@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { TabBar } from '../workspace/TabBar';
 import { Canvas } from '../workspace/Canvas';
 import { ExportBar } from '../workspace/ExportBar';

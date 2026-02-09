@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import { MessageBubble } from './MessageBubble';
 import { useApp } from '../../contexts/AppContext';
 import { Loader2 } from 'lucide-react';
