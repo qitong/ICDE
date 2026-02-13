@@ -18,7 +18,7 @@ export interface Message {
 }
 
 // Tab Types
-export type TabType = 'chart' | 'table' | 'text' | 'code';
+export type TabType = 'chart' | 'table' | 'text' | 'code' | 'metadata' | 'script' | 'file';
 
 export interface Tab {
   id: string;
@@ -43,6 +43,7 @@ export interface AppState {
   expandedFolders: Set<string>;
   files: FileNode[];
   sidebarCollapsed: boolean;
+  sidebarWidth: number;
 
   // Workspace
   activeTab: TabType;
@@ -59,6 +60,30 @@ export interface AppState {
   // Upload
   uploadModalOpen: boolean;
   datasets: Dataset[];
+
+  // Projects
+  currentProjectId: string | null;
+  projects: Project[];
+  projectTree: ProjectTree | null;
+
+  // Lineage
+  selectedDatasetId: string | null;
+  metadataData: DatasetMetadata | null;
+  metadataLoading: boolean;
+
+  // Scripts
+  scripts: Script[];
+  selectedScriptId: string | null;
+
+  // File Preview
+  selectedFilePreview: {
+    datasetId: string;
+    fileId: string;
+    fileName: string;
+    fileType: string;
+  } | null;
+  filePreviewData: FilePreview | null;
+  filePreviewLoading: boolean;
 }
 
 // Action Types
@@ -66,6 +91,7 @@ export type AppAction =
   | { type: 'SELECT_FILE'; payload: string }
   | { type: 'TOGGLE_FOLDER'; payload: string }
   | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'SET_SIDEBAR_WIDTH'; payload: number }
   | { type: 'SET_ACTIVE_TAB'; payload: TabType }
   | { type: 'SET_CANVAS_CONTENT'; payload: CanvasContent }
   | { type: 'ADD_MESSAGE'; payload: Message }
@@ -74,10 +100,59 @@ export type AppAction =
   | { type: 'SET_DATA_SOURCE'; payload: string }
   | { type: 'SET_UPLOAD_MODAL_OPEN'; payload: boolean }
   | { type: 'SET_DATASETS'; payload: Dataset[] }
-  | { type: 'ADD_DATASET'; payload: Dataset };
+  | { type: 'ADD_DATASET'; payload: Dataset }
+  | { type: 'SET_CURRENT_PROJECT'; payload: string | null }
+  | { type: 'SET_PROJECTS'; payload: Project[] }
+  | { type: 'SET_PROJECT_TREE'; payload: ProjectTree | null }
+  | { type: 'SET_SELECTED_DATASET'; payload: string | null }
+  | { type: 'SET_METADATA_DATA'; payload: DatasetMetadata | null }
+  | { type: 'SET_METADATA_LOADING'; payload: boolean }
+  | { type: 'SET_SCRIPTS'; payload: Script[] }
+  | { type: 'SET_SELECTED_SCRIPT'; payload: string | null }
+  | { type: 'SET_SELECTED_FILE_PREVIEW'; payload: { datasetId: string; fileId: string; fileName: string; fileType: string } | null }
+  | { type: 'SET_FILE_PREVIEW_DATA'; payload: FilePreview | null }
+  | { type: 'SET_FILE_PREVIEW_LOADING'; payload: boolean };
 
 // Export Types
 export type ExportFormat = 'word' | 'pdf';
+
+// Project Types
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectCreate {
+  name: string;
+  description?: string;
+}
+
+export interface DatasetSummary {
+  id: string;
+  name: string;
+  type: string;
+  file_count: number;
+  created_at: string;
+}
+
+export interface StudyVersion {
+  name: string;
+  datasets: DatasetSummary[];
+}
+
+export interface Study {
+  name: string;
+  versions: StudyVersion[];
+}
+
+export interface ProjectTree {
+  project_id: string;
+  project_name: string;
+  studies: Study[];
+}
 
 // Dataset Types
 export type DatasetType = 'RAW' | 'DERIVED';
@@ -103,6 +178,10 @@ export interface Dataset {
   // Stale state
   is_stale: boolean;
   stale_reason: string | null;
+  // Project and hierarchy
+  project_id: string | null;
+  study_name: string | null;
+  version_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -138,6 +217,44 @@ export interface FilePreview {
 }
 
 // Script Types
+
+// Parameter property for function parameters
+export interface ParameterProperty {
+  type: string;  // DataFrame, string, int, float, list, dict, etc.
+  description: string;
+  enum?: string[];  // For categorical parameters
+  default?: unknown;
+  items?: Record<string, unknown>;  // For array types
+}
+
+// JSON Schema format for function parameters (OpenAI-compatible)
+export interface ParametersSchema {
+  type: string;  // "object"
+  properties: Record<string, ParameterProperty>;
+  required: string[];
+}
+
+// Schema for function return value
+export interface ReturnsSchema {
+  type: string;  // DataFrame, dict, list, int, etc.
+  description: string;
+  properties?: Record<string, unknown>;
+}
+
+// Function definition within a script
+export interface FunctionDefinition {
+  name: string;
+  description: string;
+  is_main: boolean;
+}
+
+// Example of how to call the script
+export interface ExampleCall {
+  input: string;
+  output: string;
+  description?: string;
+}
+
 export interface Script {
   id: string;
   name: string;
@@ -148,6 +265,13 @@ export interface Script {
   language: string;
   input_requirements: string | null;
   output_description: string | null;
+  // Structured metadata for LLM tool calling
+  parameters_schema: ParametersSchema | null;
+  returns_schema: ReturnsSchema | null;
+  functions: FunctionDefinition[] | null;
+  use_cases: string[] | null;
+  example_calls: ExampleCall[] | null;
+  // Origin and stats
   created_by: 'user' | 'llm';
   created_from_prompt: string | null;
   usage_count: number;
@@ -169,6 +293,12 @@ export interface ScriptCreate {
   output_description?: string;
   created_by?: 'user' | 'llm';
   created_from_prompt?: string;
+  // Structured metadata for LLM tool calling
+  parameters_schema?: ParametersSchema;
+  returns_schema?: ReturnsSchema;
+  functions?: FunctionDefinition[];
+  use_cases?: string[];
+  example_calls?: ExampleCall[];
 }
 
 export interface DeriveDatasetRequest {
@@ -176,20 +306,24 @@ export interface DeriveDatasetRequest {
   output_name: string;
 }
 
-// Lineage Types
-export interface LineageNode {
+// Metadata Types (Dataset relationships)
+export interface RelatedDataset {
   id: string;
   name: string;
   type: DatasetType;
   relationship: 'version_parent' | 'version_child' | 'derivation_source' | 'derived';
 }
 
-export interface DatasetLineage {
+export interface DatasetMetadata {
   dataset: {
     id: string;
     name: string;
     type: DatasetType;
   };
-  ancestors: LineageNode[];
-  descendants: LineageNode[];
+  ancestors: RelatedDataset[];
+  descendants: RelatedDataset[];
 }
+
+// Legacy alias for backward compatibility
+export type DatasetLineage = DatasetMetadata;
+export type LineageNode = RelatedDataset;

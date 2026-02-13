@@ -2,9 +2,50 @@
 Pydantic schemas for Script API.
 """
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 
+
+# ============ Parameter Schema Types ============
+
+class ParameterProperty(BaseModel):
+    """Schema for a single parameter property."""
+    type: str  # DataFrame, string, int, float, list, dict, etc.
+    description: str
+    enum: Optional[List[str]] = None  # For categorical parameters
+    default: Optional[Any] = None
+    items: Optional[Dict[str, Any]] = None  # For array types
+
+
+class ParametersSchema(BaseModel):
+    """JSON Schema format for function parameters (OpenAI-compatible)."""
+    type: str = "object"
+    properties: Dict[str, ParameterProperty]
+    required: List[str] = []
+
+
+class ReturnsSchema(BaseModel):
+    """Schema for function return value."""
+    type: str  # DataFrame, dict, list, int, float, string, etc.
+    description: str
+    properties: Optional[Dict[str, Any]] = None  # For dict/object return types
+
+
+class FunctionDefinition(BaseModel):
+    """Definition of a function provided by the script."""
+    name: str
+    description: str
+    is_main: bool = False  # Whether this is the main entry point
+
+
+class ExampleCall(BaseModel):
+    """Example of how to call the script."""
+    input: str  # e.g., "count_patients(adsl_df, population='safety')"
+    output: str  # e.g., "{'total': 95, 'by_arm': {'Treatment A': 38, ...}}"
+    description: Optional[str] = None
+
+
+# ============ Script CRUD Schemas ============
 
 class ScriptCreate(BaseModel):
     """Schema for creating a new script."""
@@ -18,6 +59,12 @@ class ScriptCreate(BaseModel):
     output_description: Optional[str] = None
     created_by: str = Field(default="user", max_length=50)
     created_from_prompt: Optional[str] = None
+    # New structured metadata
+    parameters_schema: Optional[ParametersSchema] = None
+    returns_schema: Optional[ReturnsSchema] = None
+    functions: Optional[List[FunctionDefinition]] = None
+    use_cases: Optional[List[str]] = None
+    example_calls: Optional[List[ExampleCall]] = None
 
 
 class ScriptUpdate(BaseModel):
@@ -28,6 +75,12 @@ class ScriptUpdate(BaseModel):
     keywords: Optional[List[str]] = None
     input_requirements: Optional[str] = None
     output_description: Optional[str] = None
+    # New structured metadata
+    parameters_schema: Optional[ParametersSchema] = None
+    returns_schema: Optional[ReturnsSchema] = None
+    functions: Optional[List[FunctionDefinition]] = None
+    use_cases: Optional[List[str]] = None
+    example_calls: Optional[List[ExampleCall]] = None
 
 
 class ScriptResponse(BaseModel):
@@ -41,6 +94,13 @@ class ScriptResponse(BaseModel):
     language: str
     input_requirements: Optional[str] = None
     output_description: Optional[str] = None
+    # New structured metadata
+    parameters_schema: Optional[ParametersSchema] = None
+    returns_schema: Optional[ReturnsSchema] = None
+    functions: Optional[List[FunctionDefinition]] = None
+    use_cases: Optional[List[str]] = None
+    example_calls: Optional[List[ExampleCall]] = None
+    # Origin and stats
     created_by: str
     created_from_prompt: Optional[str] = None
     usage_count: int
@@ -55,13 +115,22 @@ class ScriptResponse(BaseModel):
     @classmethod
     def from_orm(cls, script):
         """Convert ORM model to response schema."""
-        keywords = None
-        if script.keywords:
-            import json
-            try:
-                keywords = json.loads(script.keywords)
-            except (json.JSONDecodeError, TypeError):
-                keywords = None
+        import json
+
+        def parse_json_field(field_value):
+            if field_value:
+                try:
+                    return json.loads(field_value)
+                except (json.JSONDecodeError, TypeError):
+                    return None
+            return None
+
+        keywords = parse_json_field(script.keywords)
+        parameters_schema = parse_json_field(script.parameters_schema)
+        returns_schema = parse_json_field(script.returns_schema)
+        functions = parse_json_field(script.functions)
+        use_cases = parse_json_field(script.use_cases)
+        example_calls = parse_json_field(script.example_calls)
 
         return cls(
             id=script.id,
@@ -73,6 +142,11 @@ class ScriptResponse(BaseModel):
             language=script.language,
             input_requirements=script.input_requirements,
             output_description=script.output_description,
+            parameters_schema=parameters_schema,
+            returns_schema=returns_schema,
+            functions=functions,
+            use_cases=use_cases,
+            example_calls=example_calls,
             created_by=script.created_by,
             created_from_prompt=script.created_from_prompt,
             usage_count=script.usage_count,

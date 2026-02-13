@@ -3,6 +3,32 @@ import type { ReactNode } from 'react';
 import type { AppState, AppAction, FileNode, Message, TabType } from '../types';
 import { api } from '../services/api';
 
+// Constants
+const STORAGE_KEYS = {
+  CURRENT_PROJECT_ID: 'icde_current_project_id',
+  SIDEBAR_WIDTH: 'icde_sidebar_width',
+};
+
+const DEFAULT_SIDEBAR_WIDTH = 256;
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 600;
+
+// Helper to get persisted values
+function getPersistedProjectId(): string | null {
+  return localStorage.getItem(STORAGE_KEYS.CURRENT_PROJECT_ID);
+}
+
+function getPersistedSidebarWidth(): number {
+  const saved = localStorage.getItem(STORAGE_KEYS.SIDEBAR_WIDTH);
+  if (saved) {
+    const width = parseInt(saved, 10);
+    if (!isNaN(width) && width >= MIN_SIDEBAR_WIDTH && width <= MAX_SIDEBAR_WIDTH) {
+      return width;
+    }
+  }
+  return DEFAULT_SIDEBAR_WIDTH;
+}
+
 // Mock data for demonstration
 const mockFiles: FileNode[] = [
   {
@@ -58,9 +84,10 @@ const initialMessages: Message[] = [
 
 const initialState: AppState = {
   selectedFileId: null,
-  expandedFolders: new Set(['datasets', 'outputs']),
+  expandedFolders: new Set(['datasets', 'outputs', 'scripts']),
   files: mockFiles,
   sidebarCollapsed: false,
+  sidebarWidth: getPersistedSidebarWidth(),
   activeTab: 'chart',
   canvasContent: null,
   messages: initialMessages,
@@ -69,6 +96,17 @@ const initialState: AppState = {
   currentDataSource: 'Study ABC-123',
   uploadModalOpen: false,
   datasets: [],
+  currentProjectId: getPersistedProjectId(),
+  projects: [],
+  projectTree: null,
+  selectedDatasetId: null,
+  metadataData: null,
+  metadataLoading: false,
+  scripts: [],
+  selectedScriptId: null,
+  selectedFilePreview: null,
+  filePreviewData: null,
+  filePreviewLoading: false,
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -86,6 +124,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed };
+    case 'SET_SIDEBAR_WIDTH':
+      return { ...state, sidebarWidth: action.payload };
     case 'SET_ACTIVE_TAB':
       return { ...state, activeTab: action.payload };
     case 'SET_CANVAS_CONTENT':
@@ -104,6 +144,28 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, datasets: action.payload };
     case 'ADD_DATASET':
       return { ...state, datasets: [action.payload, ...state.datasets] };
+    case 'SET_CURRENT_PROJECT':
+      return { ...state, currentProjectId: action.payload };
+    case 'SET_PROJECTS':
+      return { ...state, projects: action.payload };
+    case 'SET_PROJECT_TREE':
+      return { ...state, projectTree: action.payload };
+    case 'SET_SELECTED_DATASET':
+      return { ...state, selectedDatasetId: action.payload };
+    case 'SET_METADATA_DATA':
+      return { ...state, metadataData: action.payload };
+    case 'SET_METADATA_LOADING':
+      return { ...state, metadataLoading: action.payload };
+    case 'SET_SCRIPTS':
+      return { ...state, scripts: action.payload };
+    case 'SET_SELECTED_SCRIPT':
+      return { ...state, selectedScriptId: action.payload };
+    case 'SET_SELECTED_FILE_PREVIEW':
+      return { ...state, selectedFilePreview: action.payload };
+    case 'SET_FILE_PREVIEW_DATA':
+      return { ...state, filePreviewData: action.payload };
+    case 'SET_FILE_PREVIEW_LOADING':
+      return { ...state, filePreviewLoading: action.payload };
     default:
       return state;
   }
@@ -116,11 +178,22 @@ interface AppContextValue {
   selectFile: (id: string) => void;
   toggleFolder: (id: string) => void;
   toggleSidebar: () => void;
+  setSidebarWidth: (width: number) => void;
   setActiveTab: (tab: TabType) => void;
   sendMessage: (content: string) => void;
   openUploadModal: () => void;
   closeUploadModal: () => void;
   loadDatasets: () => Promise<void>;
+  loadProjects: () => Promise<void>;
+  switchProject: (projectId: string | null) => Promise<void>;
+  loadProjectTree: () => Promise<void>;
+  viewDatasetMetadata: (datasetId: string) => Promise<void>;
+  loadScripts: () => Promise<void>;
+  viewScript: (scriptId: string) => void;
+  updateScript: (scriptId: string, data: Partial<import('../types').ScriptCreate>) => Promise<void>;
+  createScript: (data: import('../types').ScriptCreate) => Promise<import('../types').Script>;
+  deleteScript: (scriptId: string) => Promise<void>;
+  viewFile: (datasetId: string, fileId: string, fileName: string, fileType: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -138,6 +211,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const toggleSidebar = () => {
     dispatch({ type: 'TOGGLE_SIDEBAR' });
+  };
+
+  const setSidebarWidth = (width: number) => {
+    const clampedWidth = Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH);
+    dispatch({ type: 'SET_SIDEBAR_WIDTH', payload: clampedWidth });
+    localStorage.setItem(STORAGE_KEYS.SIDEBAR_WIDTH, clampedWidth.toString());
   };
 
   const setActiveTab = (tab: TabType) => {
@@ -187,10 +266,154 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Load datasets on mount
+  const loadProjects = async () => {
+    try {
+      const projects = await api.listProjects();
+      dispatch({ type: 'SET_PROJECTS', payload: projects });
+
+      // Auto-select first project if none selected
+      if (!state.currentProjectId && projects.length > 0) {
+        await switchProject(projects[0].id);
+      }
+    } catch (error) {
+      console.error('Failed to load projects:', error);
+    }
+  };
+
+  const switchProject = async (projectId: string | null) => {
+    dispatch({ type: 'SET_CURRENT_PROJECT', payload: projectId });
+    dispatch({ type: 'SET_PROJECT_TREE', payload: null });
+
+    if (projectId) {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_PROJECT_ID, projectId);
+      // Load project tree
+      try {
+        const tree = await api.getProjectTree(projectId);
+        dispatch({ type: 'SET_PROJECT_TREE', payload: tree });
+      } catch (error) {
+        console.error('Failed to load project tree:', error);
+      }
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.CURRENT_PROJECT_ID);
+    }
+  };
+
+  const loadProjectTree = async () => {
+    if (!state.currentProjectId) return;
+
+    try {
+      const tree = await api.getProjectTree(state.currentProjectId);
+      dispatch({ type: 'SET_PROJECT_TREE', payload: tree });
+    } catch (error) {
+      console.error('Failed to load project tree:', error);
+    }
+  };
+
+  const viewDatasetMetadata = async (datasetId: string) => {
+    dispatch({ type: 'SET_SELECTED_DATASET', payload: datasetId });
+    dispatch({ type: 'SET_METADATA_LOADING', payload: true });
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'metadata' });
+
+    try {
+      const metadataData = await api.getDatasetLineage(datasetId);
+      dispatch({ type: 'SET_METADATA_DATA', payload: metadataData });
+    } catch (error) {
+      console.error('Failed to load metadata:', error);
+      dispatch({ type: 'SET_METADATA_DATA', payload: null });
+    } finally {
+      dispatch({ type: 'SET_METADATA_LOADING', payload: false });
+    }
+  };
+
+  const loadScripts = async () => {
+    try {
+      const scripts = await api.listScripts();
+      dispatch({ type: 'SET_SCRIPTS', payload: scripts });
+    } catch (error) {
+      console.error('Failed to load scripts:', error);
+    }
+  };
+
+  const viewScript = (scriptId: string) => {
+    dispatch({ type: 'SET_SELECTED_SCRIPT', payload: scriptId });
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'script' });
+  };
+
+  const updateScript = async (scriptId: string, data: Partial<import('../types').ScriptCreate>) => {
+    try {
+      const updatedScript = await api.updateScript(scriptId, data);
+      // Update the script in the local state
+      const updatedScripts = state.scripts.map((s) =>
+        s.id === scriptId ? updatedScript : s
+      );
+      dispatch({ type: 'SET_SCRIPTS', payload: updatedScripts });
+    } catch (error) {
+      console.error('Failed to update script:', error);
+      throw error;
+    }
+  };
+
+  const createScript = async (data: import('../types').ScriptCreate) => {
+    try {
+      const newScript = await api.createScript(data);
+      dispatch({ type: 'SET_SCRIPTS', payload: [newScript, ...state.scripts] });
+      return newScript;
+    } catch (error) {
+      console.error('Failed to create script:', error);
+      throw error;
+    }
+  };
+
+  const deleteScript = async (scriptId: string) => {
+    try {
+      await api.deleteScript(scriptId);
+      const updatedScripts = state.scripts.filter((s) => s.id !== scriptId);
+      dispatch({ type: 'SET_SCRIPTS', payload: updatedScripts });
+      // Clear selection if deleted script was selected
+      if (state.selectedScriptId === scriptId) {
+        dispatch({ type: 'SET_SELECTED_SCRIPT', payload: null });
+      }
+    } catch (error) {
+      console.error('Failed to delete script:', error);
+      throw error;
+    }
+  };
+
+  const viewFile = async (datasetId: string, fileId: string, fileName: string, fileType: string) => {
+    dispatch({ type: 'SET_SELECTED_FILE_PREVIEW', payload: { datasetId, fileId, fileName, fileType } });
+    dispatch({ type: 'SET_FILE_PREVIEW_LOADING', payload: true });
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'file' });
+
+    try {
+      // Only fetch preview for tabular file types
+      const tabularTypes = ['xlsx', 'xls', 'csv'];
+      if (tabularTypes.includes(fileType.toLowerCase())) {
+        const previewData = await api.getFilePreview(datasetId, fileId);
+        dispatch({ type: 'SET_FILE_PREVIEW_DATA', payload: previewData });
+      } else {
+        dispatch({ type: 'SET_FILE_PREVIEW_DATA', payload: null });
+      }
+    } catch (error) {
+      console.error('Failed to load file preview:', error);
+      dispatch({ type: 'SET_FILE_PREVIEW_DATA', payload: null });
+    } finally {
+      dispatch({ type: 'SET_FILE_PREVIEW_LOADING', payload: false });
+    }
+  };
+
+  // Load datasets, projects, and scripts on mount
   useEffect(() => {
     loadDatasets();
+    loadProjects();
+    loadScripts();
   }, []);
+
+  // Load project tree when current project changes
+  useEffect(() => {
+    if (state.currentProjectId) {
+      loadProjectTree();
+    }
+  }, [state.currentProjectId]);
 
   return (
     <AppContext.Provider
@@ -200,11 +423,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         selectFile,
         toggleFolder,
         toggleSidebar,
+        setSidebarWidth,
         setActiveTab,
         sendMessage,
         openUploadModal,
         closeUploadModal,
         loadDatasets,
+        loadProjects,
+        switchProject,
+        loadProjectTree,
+        viewDatasetMetadata,
+        loadScripts,
+        viewScript,
+        updateScript,
+        createScript,
+        deleteScript,
+        viewFile,
       }}
     >
       {children}

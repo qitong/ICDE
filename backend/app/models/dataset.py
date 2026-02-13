@@ -9,6 +9,7 @@ from .base import Base
 
 if TYPE_CHECKING:
     from .script import Script
+    from .project import Project
 
 
 def generate_uuid() -> str:
@@ -32,6 +33,17 @@ class Dataset(Base):
         default=DatasetType.RAW,
         nullable=False
     )
+
+    # Project association
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True
+    )
+
+    # Hierarchical organization (Study > Version)
+    study_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    version_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     # Version lineage (time dimension)
     parent_dataset_id: Mapped[Optional[str]] = mapped_column(
@@ -100,6 +112,11 @@ class Dataset(Base):
 
     script: Mapped[Optional["Script"]] = relationship(
         "Script",
+        back_populates="datasets"
+    )
+
+    project: Mapped[Optional["Project"]] = relationship(
+        "Project",
         back_populates="datasets"
     )
 

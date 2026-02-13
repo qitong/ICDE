@@ -6,6 +6,9 @@ import type {
   ScriptCreate,
   DeriveDatasetRequest,
   DatasetLineage,
+  Project,
+  ProjectCreate,
+  ProjectTree,
 } from '../types';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -43,9 +46,57 @@ interface CreateDatasetOptions {
   parent_dataset_id?: string;
   crf_version?: string;
   patient_id_column?: string;
+  project_id?: string;
+  study_name?: string;
+  version_name?: string;
 }
 
 export const api = {
+  // Projects
+  async createProject(project: ProjectCreate): Promise<Project> {
+    const response = await fetch(`${API_BASE_URL}/api/projects`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(project),
+    });
+    return handleResponse<Project>(response);
+  },
+
+  async listProjects(): Promise<Project[]> {
+    const response = await fetch(`${API_BASE_URL}/api/projects`);
+    return handleResponse<Project[]>(response);
+  },
+
+  async getProject(id: string): Promise<Project> {
+    const response = await fetch(`${API_BASE_URL}/api/projects/${id}`);
+    return handleResponse<Project>(response);
+  },
+
+  async updateProject(id: string, data: Partial<ProjectCreate>): Promise<Project> {
+    const response = await fetch(`${API_BASE_URL}/api/projects/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<Project>(response);
+  },
+
+  async deleteProject(id: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/projects/${id}`, {
+      method: 'DELETE',
+    });
+    return handleResponse<void>(response);
+  },
+
+  async getProjectTree(projectId: string): Promise<ProjectTree> {
+    const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/tree`);
+    return handleResponse<ProjectTree>(response);
+  },
+
   // Datasets
   async createDataset(options: CreateDatasetOptions): Promise<Dataset> {
     const response = await fetch(`${API_BASE_URL}/api/datasets`, {
@@ -167,6 +218,17 @@ export const api = {
       `${API_BASE_URL}/api/scripts/search?q=${encodeURIComponent(query)}`
     );
     return handleResponse<Script[]>(response);
+  },
+
+  async updateScript(id: string, data: Partial<ScriptCreate>): Promise<Script> {
+    const response = await fetch(`${API_BASE_URL}/api/scripts/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<Script>(response);
   },
 
   async deleteScript(id: string): Promise<void> {

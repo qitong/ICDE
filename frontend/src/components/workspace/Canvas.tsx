@@ -1,6 +1,8 @@
-
 import { BarChart3, Table2, FileText, Code, MousePointer } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
+import { MetadataView } from '../lineage';
+import { ScriptView } from './ScriptView';
+import { FilePreviewView } from './FilePreviewView';
 
 export function Canvas() {
   const { state } = useApp();
@@ -30,6 +32,12 @@ export function Canvas() {
           icon: Code,
           title: 'Code View',
           description: 'Your generated code and scripts will appear here',
+        };
+      default:
+        return {
+          icon: Code,
+          title: 'View',
+          description: 'Content will appear here',
         };
     }
   };
@@ -229,6 +237,21 @@ export function Canvas() {
         </div>
       </div>
     );
+  }
+
+  // Metadata view
+  if (state.activeTab === 'metadata') {
+    return <MetadataView />;
+  }
+
+  // Script view
+  if (state.activeTab === 'script') {
+    return <ScriptView />;
+  }
+
+  // File preview view
+  if (state.activeTab === 'file') {
+    return <FilePreviewView />;
   }
 
   // Empty state for other tabs

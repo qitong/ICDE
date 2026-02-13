@@ -6,6 +6,15 @@ from .dataset import (
     ColumnInfo,
     FilePreview,
 )
+from .project import (
+    ProjectCreate,
+    ProjectUpdate,
+    ProjectResponse,
+    ProjectTree,
+    Study,
+    StudyVersion,
+    DatasetSummary,
+)
 from .script import (
     ScriptCreate,
     ScriptUpdate,
@@ -20,6 +29,13 @@ __all__ = [
     "DatasetFileResponse",
     "ColumnInfo",
     "FilePreview",
+    "ProjectCreate",
+    "ProjectUpdate",
+    "ProjectResponse",
+    "ProjectTree",
+    "Study",
+    "StudyVersion",
+    "DatasetSummary",
     "ScriptCreate",
     "ScriptUpdate",
     "ScriptResponse",

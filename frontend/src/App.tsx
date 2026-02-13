@@ -1,7 +1,8 @@
 import { useCallback } from 'react';
 import { Sidebar, MainWorkspace, ChatPanel } from './components/layout';
 import { UploadModal } from './components/upload';
-import { Database, ChevronDown, Bell, HelpCircle, User } from 'lucide-react';
+import { ProjectSelector } from './components/header';
+import { Bell, HelpCircle, User } from 'lucide-react';
 import { useApp } from './contexts/AppContext';
 
 function Header() {
@@ -24,14 +25,8 @@ function Header() {
         {/* Divider */}
         <div className="w-px h-6 bg-border" />
 
-        {/* Data source selector */}
-        <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-surface transition-colors">
-          <Database size={16} className="text-primary" />
-          <span className="text-sm font-medium text-foreground">
-            {state.currentDataSource}
-          </span>
-          <ChevronDown size={14} className="text-muted" />
-        </button>
+        {/* Project selector */}
+        <ProjectSelector />
       </div>
 
       {/* Right: Actions */}

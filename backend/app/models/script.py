@@ -32,9 +32,37 @@ class Script(Base):
     language: Mapped[str] = mapped_column(String(20), default="python")
     code: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # Input/Output specification
-    input_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    # Input/Output specification (legacy, kept for backward compatibility)
+    input_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     output_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Structured metadata for LLM tool calling
+    # parameters_schema: JSON Schema for input parameters (OpenAI function calling format)
+    # {
+    #   "type": "object",
+    #   "properties": {
+    #     "adsl_df": {"type": "DataFrame", "description": "Subject-level dataset"},
+    #     "population": {"type": "string", "enum": ["all", "safety", "itt"]}
+    #   },
+    #   "required": ["adsl_df"]
+    # }
+    parameters_schema: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+
+    # returns_schema: JSON Schema for return value
+    # {"type": "DataFrame", "description": "Summary statistics table"}
+    returns_schema: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+
+    # functions: JSON array of functions/methods provided by this script
+    # [{"name": "count_patients", "description": "Count unique patients", "is_main": true}]
+    functions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+
+    # use_cases: JSON array of example use cases for LLM to understand when to use this script
+    # ["Count total patients in study", "Get patient distribution by treatment arm"]
+    use_cases: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+
+    # example_calls: JSON array of example function calls
+    # [{"input": "count_patients(adsl_df)", "output": "{'total': 100, 'by_arm': {...}}"}]
+    example_calls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
 
     # Origin
     created_by: Mapped[str] = mapped_column(String(50), default="user")  # user | llm

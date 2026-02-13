@@ -1,11 +1,53 @@
-
+import { useRef, useEffect, useCallback } from 'react';
 import { FileTree } from '../sidebar/FileTree';
 import { Search, Upload, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 
+const MIN_WIDTH = 200;
+const MAX_WIDTH = 600;
+
 export function Sidebar() {
-  const { state, toggleSidebar, openUploadModal } = useApp();
+  const { state, toggleSidebar, setSidebarWidth, openUploadModal } = useApp();
   const isCollapsed = state.sidebarCollapsed;
+  const sidebarRef = useRef<HTMLElement>(null);
+  const isResizingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startWidthRef = useRef(0);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    startXRef.current = e.clientX;
+    startWidthRef.current = state.sidebarWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [state.sidebarWidth]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingRef.current) return;
+
+      const delta = e.clientX - startXRef.current;
+      const newWidth = Math.min(Math.max(startWidthRef.current + delta, MIN_WIDTH), MAX_WIDTH);
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      if (isResizingRef.current) {
+        isResizingRef.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [setSidebarWidth]);
 
   // Collapsed state - just show toggle button
   if (isCollapsed) {
@@ -24,7 +66,11 @@ export function Sidebar() {
 
   // Expanded state
   return (
-    <aside className="w-[200px] h-full bg-background border-r border-border flex flex-col transition-all duration-200">
+    <aside
+      ref={sidebarRef}
+      style={{ width: state.sidebarWidth }}
+      className="relative h-full bg-background border-r border-border flex flex-col"
+    >
       {/* Header with collapse button */}
       <div className="h-10 px-2 flex items-center justify-between border-b border-border">
         <span className="text-xs font-medium text-muted uppercase tracking-wider pl-1">
@@ -81,6 +127,16 @@ export function Sidebar() {
           <span>Upload Dataset</span>
         </button>
       </div>
+
+      {/* Resize handle */}
+      <div
+        onMouseDown={handleMouseDown}
+        className="
+          absolute top-0 right-0 w-1 h-full cursor-col-resize
+          hover:bg-primary/50 active:bg-primary/70
+          transition-colors duration-150
+        "
+      />
     </aside>
   );
 }

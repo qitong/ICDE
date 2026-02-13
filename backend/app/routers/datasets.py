@@ -54,6 +54,9 @@ async def create_dataset(
         parent_dataset_id=dataset_in.parent_dataset_id,
         crf_version=dataset_in.crf_version,
         patient_id_column=dataset_in.patient_id_column or "SUBJID",
+        project_id=dataset_in.project_id,
+        study_name=dataset_in.study_name,
+        version_name=dataset_in.version_name,
     )
 
     db.add(dataset)

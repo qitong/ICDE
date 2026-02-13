@@ -9,6 +9,9 @@ class DatasetCreate(BaseModel):
     parent_dataset_id: Optional[str] = None
     crf_version: Optional[str] = None
     patient_id_column: Optional[str] = None
+    project_id: Optional[str] = None
+    study_name: Optional[str] = None
+    version_name: Optional[str] = None
 
 
 class ColumnInfo(BaseModel):
@@ -52,6 +55,9 @@ class DatasetResponse(BaseModel):
     patient_id_column: Optional[str] = None
     is_stale: bool = False
     stale_reason: Optional[str] = None
+    project_id: Optional[str] = None
+    study_name: Optional[str] = None
+    version_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -78,6 +84,9 @@ class DatasetResponse(BaseModel):
             "patient_id_column": obj.patient_id_column,
             "is_stale": obj.is_stale,
             "stale_reason": obj.stale_reason,
+            "project_id": obj.project_id,
+            "study_name": obj.study_name,
+            "version_name": obj.version_name,
             "created_at": obj.created_at,
             "updated_at": obj.updated_at,
         }
