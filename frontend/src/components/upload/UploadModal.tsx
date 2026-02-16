@@ -2,7 +2,9 @@ import React, { useState, useRef, useCallback } from 'react';
 import { X, Upload, FileSpreadsheet, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { api } from '../../services/api';
 import { TablePreview } from './TablePreview';
-import type { DatasetFile, ColumnInfo } from '../../types';
+import { DatasetRelationModal } from '../modals';
+import { useApp } from '../../contexts/AppContext';
+import type { Dataset, DatasetFile, ColumnInfo } from '../../types';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -19,12 +21,15 @@ interface FileWithPreview {
 type UploadStep = 'input' | 'uploading' | 'preview';
 
 export function UploadModal({ isOpen, onClose, onUploadComplete }: UploadModalProps) {
+  const { state } = useApp();
   const [step, setStep] = useState<UploadStep>('input');
   const [datasetName, setDatasetName] = useState('');
   const [description, setDescription] = useState('');
   const [files, setFiles] = useState<FileWithPreview[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [createdDataset, setCreatedDataset] = useState<Dataset | null>(null);
+  const [showRelationModal, setShowRelationModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const allowedExtensions = ['.csv', '.xlsx', '.xls'];
@@ -121,6 +126,9 @@ export function UploadModal({ isOpen, onClose, onUploadComplete }: UploadModalPr
         setUploadProgress(70 + ((i + 1) / uploadedFiles.length) * 30);
       }
 
+      // Refresh dataset to get updated info
+      const refreshedDataset = await api.getDataset(dataset.id);
+      setCreatedDataset(refreshedDataset);
       setFiles(updatedFiles);
       setStep('preview');
     } catch (err) {
@@ -138,7 +146,19 @@ export function UploadModal({ isOpen, onClose, onUploadComplete }: UploadModalPr
     setDescription('');
     setFiles([]);
     setError(null);
+    setCreatedDataset(null);
+    setShowRelationModal(false);
     onClose();
+  };
+
+  const handleSetRelationship = () => {
+    setShowRelationModal(true);
+  };
+
+  const handleRelationComplete = () => {
+    setShowRelationModal(false);
+    onUploadComplete();
+    handleClose();
   };
 
   if (!isOpen) return null;
@@ -331,16 +351,34 @@ export function UploadModal({ isOpen, onClose, onUploadComplete }: UploadModalPr
             </>
           )}
           {step === 'preview' && (
-            <button
-              onClick={handleClose}
-              className="px-4 py-2 text-sm font-medium text-white bg-primary
-                hover:bg-primary/90 rounded-lg transition-colors"
-            >
-              Done
-            </button>
+            <>
+              <button
+                onClick={handleClose}
+                className="px-4 py-2 text-sm font-medium text-muted hover:text-foreground
+                  hover:bg-surface rounded-lg transition-colors"
+              >
+                Skip
+              </button>
+              <button
+                onClick={handleSetRelationship}
+                className="px-4 py-2 text-sm font-medium text-white bg-primary
+                  hover:bg-primary/90 rounded-lg transition-colors"
+              >
+                Set Relationship
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {/* Dataset Relation Modal */}
+      <DatasetRelationModal
+        isOpen={showRelationModal}
+        onClose={() => setShowRelationModal(false)}
+        onComplete={handleRelationComplete}
+        dataset={createdDataset}
+        allDatasets={state.datasets}
+      />
     </div>
   );
 }

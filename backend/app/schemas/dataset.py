@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from datetime import datetime
 
 
@@ -55,6 +55,7 @@ class DatasetResponse(BaseModel):
     patient_id_column: Optional[str] = None
     is_stale: bool = False
     stale_reason: Optional[str] = None
+    is_manual: bool = False
     project_id: Optional[str] = None
     study_name: Optional[str] = None
     version_name: Optional[str] = None
@@ -84,6 +85,7 @@ class DatasetResponse(BaseModel):
             "patient_id_column": obj.patient_id_column,
             "is_stale": obj.is_stale,
             "stale_reason": obj.stale_reason,
+            "is_manual": obj.is_manual,
             "project_id": obj.project_id,
             "study_name": obj.study_name,
             "version_name": obj.version_name,
@@ -113,3 +115,13 @@ class FilePreview(BaseModel):
     column_count: int
     columns: List[ColumnInfo]
     sample_rows: List[dict[str, Any]]
+
+
+class SetRelationshipRequest(BaseModel):
+    """Request schema for setting dataset relationships after upload."""
+    relationship_type: Literal["none", "version", "derived"]
+    parent_dataset_id: Optional[str] = None      # For version relationship
+    source_dataset_id: Optional[str] = None      # For derived relationship
+    version_name: Optional[str] = None           # Version label (e.g., v2.1)
+    is_manual: bool = False                      # Whether manually created (自建)
+    description: Optional[str] = None            # Additional description

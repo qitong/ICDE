@@ -138,7 +138,7 @@ function FolderCategory({
               e.stopPropagation();
               onAdd();
             }}
-            className="p-1 mr-2 text-muted hover:text-primary hover:bg-primary/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+            className="p-1 mr-2 text-muted hover:text-primary hover:bg-primary/10 rounded transition-all"
             title={`Add new ${label.slice(0, -1)}`}
           >
             <Plus size={14} />
@@ -426,6 +426,14 @@ function DerivedDatasetItem({ dataset, depth }: DerivedDatasetItemProps) {
     viewDatasetMetadata(dataset.id);
   };
 
+  // Determine the badge - show "Manual" for manual uploads, otherwise show nothing
+  const getBadge = () => {
+    if (dataset.is_manual) {
+      return 'Manual';
+    }
+    return undefined;
+  };
+
   return (
     <div>
       <TreeItem
@@ -440,6 +448,7 @@ function DerivedDatasetItem({ dataset, depth }: DerivedDatasetItemProps) {
           />
         }
         label={dataset.name}
+        badge={getBadge()}
         onClick={handleClick}
         onToggle={handleToggle}
         hasChildren={dataset.files && dataset.files.length > 0}

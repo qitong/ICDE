@@ -8,15 +8,39 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  RefreshCw,
 } from 'lucide-react';
 import { useState } from 'react';
+import { api } from '../../services/api';
 
 export function FilePreviewView() {
-  const { state } = useApp();
+  const { state, viewFile } = useApp();
   const { selectedFilePreview, filePreviewData, filePreviewLoading } = state;
 
   const [currentPage, setCurrentPage] = useState(0);
+  const [isReparsing, setIsReparsing] = useState(false);
   const rowsPerPage = 50;
+
+  const handleReparse = async () => {
+    if (!selectedFilePreview) return;
+
+    setIsReparsing(true);
+    try {
+      // Re-parse the file on the backend
+      await api.reparseFile(selectedFilePreview.datasetId, selectedFilePreview.fileId);
+      // Reload the file preview
+      await viewFile(
+        selectedFilePreview.datasetId,
+        selectedFilePreview.fileId,
+        selectedFilePreview.fileName,
+        selectedFilePreview.fileType
+      );
+    } catch (error) {
+      console.error('Failed to reparse file:', error);
+    } finally {
+      setIsReparsing(false);
+    }
+  };
 
   // Empty state when no file is selected
   if (!selectedFilePreview) {
@@ -154,9 +178,26 @@ export function FilePreviewView() {
           <h3 className="text-lg font-semibold text-foreground mb-2">
             Failed to Load Preview
           </h3>
-          <p className="text-muted text-sm max-w-md">
-            There was an error loading the file preview. The file may be corrupted or in an unsupported format.
+          <p className="text-muted text-sm max-w-md mb-4">
+            There was an error loading the file preview. The file may need to be re-parsed.
           </p>
+          <button
+            onClick={handleReparse}
+            disabled={isReparsing}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-white text-sm rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {isReparsing ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Re-parsing...
+              </>
+            ) : (
+              <>
+                <RefreshCw size={16} />
+                Retry
+              </>
+            )}
+          </button>
         </div>
       </div>
     );

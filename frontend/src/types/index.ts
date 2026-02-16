@@ -18,7 +18,7 @@ export interface Message {
 }
 
 // Tab Types
-export type TabType = 'chart' | 'table' | 'text' | 'code' | 'metadata' | 'script' | 'file';
+export type TabType = 'content' | 'metadata';
 
 export interface Tab {
   id: string;
@@ -52,6 +52,8 @@ export interface AppState {
   // Chat
   messages: Message[];
   isProcessing: boolean;
+  currentConversationId: string | null;
+  currentProvider: string;
 
   // Analysis
   analysisStatus: AnalysisStatus;
@@ -95,7 +97,11 @@ export type AppAction =
   | { type: 'SET_ACTIVE_TAB'; payload: TabType }
   | { type: 'SET_CANVAS_CONTENT'; payload: CanvasContent }
   | { type: 'ADD_MESSAGE'; payload: Message }
+  | { type: 'UPDATE_LAST_MESSAGE'; payload: { content: string } }
   | { type: 'SET_PROCESSING'; payload: boolean }
+  | { type: 'SET_CONVERSATION_ID'; payload: string | null }
+  | { type: 'SET_PROVIDER'; payload: string }
+  | { type: 'CLEAR_MESSAGES' }
   | { type: 'SET_ANALYSIS_STATUS'; payload: AnalysisStatus }
   | { type: 'SET_DATA_SOURCE'; payload: string }
   | { type: 'SET_UPLOAD_MODAL_OPEN'; payload: boolean }
@@ -178,12 +184,26 @@ export interface Dataset {
   // Stale state
   is_stale: boolean;
   stale_reason: string | null;
+  // Manual upload flag (自建)
+  is_manual: boolean;
   // Project and hierarchy
   project_id: string | null;
   study_name: string | null;
   version_name: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// Relationship types for dataset upload
+export type RelationshipType = 'none' | 'version' | 'derived';
+
+export interface SetRelationshipRequest {
+  relationship_type: RelationshipType;
+  parent_dataset_id?: string;
+  source_dataset_id?: string;
+  version_name?: string;
+  is_manual?: boolean;
+  description?: string;
 }
 
 export interface DatasetFile {
@@ -327,3 +347,137 @@ export interface DatasetMetadata {
 // Legacy alias for backward compatibility
 export type DatasetLineage = DatasetMetadata;
 export type LineageNode = RelatedDataset;
+
+// ============== Chat Types ==============
+
+// Mention reference for @ mentions in chat
+export interface MentionRef {
+  type: 'dataset' | 'file' | 'script';
+  id: string;
+  path: string;
+  name?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// Mentionable item returned from API
+export interface MentionableItem {
+  type: 'dataset' | 'file' | 'script';
+  id: string;
+  name: string;
+  path: string;
+  metadata?: {
+    row_count?: number;
+    column_count?: number;
+    study_name?: string;
+    version_name?: string;
+    file_type?: string;
+    description?: string;
+    language?: string;
+  };
+}
+
+// Chat request sent to API
+export interface ChatRequest {
+  message: string;
+  mentions?: MentionRef[];
+  conversation_id?: string;
+  provider?: string;
+  project_id?: string;
+  stream?: boolean;
+}
+
+// Chat response from API (non-streaming)
+export interface ChatResponse {
+  message: string;
+  conversation_id: string;
+  message_id: string;
+  provider: string;
+  model?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+}
+
+// Stream chunk from SSE
+export interface StreamChunk {
+  type: 'content' | 'done' | 'error';
+  content?: string;
+  conversation_id?: string;
+  message_id?: string;
+  error?: string;
+}
+
+// Conversation summary
+export interface Conversation {
+  id: string;
+  title?: string;
+  project_id?: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+// Conversation with messages
+export interface ConversationWithMessages extends Conversation {
+  messages: ChatMessage[];
+}
+
+// Individual chat message from API
+export interface ChatMessage {
+  id: string;
+  conversation_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  mentions?: MentionRef[];
+  provider?: string;
+  model?: string;
+  tokens_used?: number;
+  status: string;
+  error_message?: string;
+  created_at: string;
+}
+
+// ============== LLM Settings Types ==============
+
+// Provider configuration
+export interface ProviderConfig {
+  provider: string;
+  display_name: string;
+  api_key?: string;
+  api_key_set: boolean;
+  api_base_url?: string;
+  model: string;
+  enabled: boolean;
+  is_default: boolean;
+  available_models: string[];
+}
+
+// LLM settings response
+export interface LLMSettings {
+  default_provider?: string;
+  providers: ProviderConfig[];
+}
+
+// Update for a single provider
+export interface LLMSettingUpdate {
+  api_key?: string;
+  api_base_url?: string;
+  model?: string;
+  enabled?: boolean;
+  is_default?: boolean;
+}
+
+// Update for all LLM settings
+export interface LLMSettingsUpdate {
+  default_provider?: string;
+  providers: Record<string, LLMSettingUpdate>;
+}
+
+// API key validation result
+export interface ApiKeyValidation {
+  provider: string;
+  valid: boolean;
+  message: string;
+}

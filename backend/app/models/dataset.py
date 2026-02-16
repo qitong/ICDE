@@ -80,6 +80,9 @@ class Dataset(Base):
     is_stale: Mapped[bool] = mapped_column(Boolean, default=False)
     stale_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Manual upload flag (for derived datasets created by user upload, not script)
+    is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Storage
     folder_path: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     file_count: Mapped[int] = mapped_column(Integer, default=0)

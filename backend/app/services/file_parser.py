@@ -94,6 +94,31 @@ class FileParser:
 
         return row_count, column_count, columns, column_info_json
 
+    @staticmethod
+    def convert_to_serializable(value: Any) -> Any:
+        """Convert a value to a JSON-serializable type."""
+        if value is None or pd.isna(value):
+            return None
+        if isinstance(value, (np.integer, np.int64, np.int32)):
+            return int(value)
+        if isinstance(value, (np.floating, np.float64, np.float32)):
+            if np.isnan(value) or np.isinf(value):
+                return None
+            return float(value)
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, (pd.Timestamp, np.datetime64)):
+            return str(value)
+        if isinstance(value, (pd.Timedelta, np.timedelta64)):
+            return str(value)
+        if isinstance(value, bytes):
+            return value.decode('utf-8', errors='replace')
+        # Fallback to string for any other types
+        try:
+            return str(value)
+        except Exception:
+            return None
+
     @classmethod
     def get_preview(cls, file_path: Path, file_id: str, file_name: str) -> dict:
         """Get a preview of the file including sample rows."""
@@ -116,8 +141,13 @@ class FileParser:
 
         # Get sample rows
         sample_df = df.head(PREVIEW_ROWS)
-        # Convert to records, handling NaN values
-        sample_rows = sample_df.replace({np.nan: None}).to_dict(orient="records")
+        # Convert to records with proper type handling for JSON serialization
+        sample_rows = []
+        for _, row in sample_df.iterrows():
+            row_dict = {}
+            for col in df.columns:
+                row_dict[str(col)] = cls.convert_to_serializable(row[col])
+            sample_rows.append(row_dict)
 
         return {
             "file_id": file_id,

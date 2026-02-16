@@ -9,6 +9,15 @@ import type {
   Project,
   ProjectCreate,
   ProjectTree,
+  SetRelationshipRequest,
+  ChatRequest,
+  ChatResponse,
+  StreamChunk,
+  Conversation,
+  ConversationWithMessages,
+  LLMSettings,
+  LLMSettingsUpdate,
+  ApiKeyValidation,
 } from '../types';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -126,6 +135,23 @@ export const api = {
     return handleResponse<void>(response);
   },
 
+  async setDatasetRelationship(
+    datasetId: string,
+    request: SetRelationshipRequest
+  ): Promise<Dataset> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/datasets/${datasetId}/relationship`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      }
+    );
+    return handleResponse<Dataset>(response);
+  },
+
   // Files
   async uploadFiles(datasetId: string, files: File[]): Promise<DatasetFile[]> {
     const formData = new FormData();
@@ -148,6 +174,22 @@ export const api = {
       `${API_BASE_URL}/api/datasets/${datasetId}/files/${fileId}/preview`
     );
     return handleResponse<FilePreview>(response);
+  },
+
+  async reparseFile(datasetId: string, fileId: string): Promise<DatasetFile> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/datasets/${datasetId}/files/${fileId}/reparse`,
+      { method: 'POST' }
+    );
+    return handleResponse<DatasetFile>(response);
+  },
+
+  async reparseAllFiles(datasetId: string): Promise<DatasetFile[]> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/datasets/${datasetId}/reparse-all`,
+      { method: 'POST' }
+    );
+    return handleResponse<DatasetFile[]>(response);
   },
 
   // Dataset Versioning
@@ -237,6 +279,154 @@ export const api = {
     });
     return handleResponse<void>(response);
   },
+
+  // ============== Chat ==============
+
+  async sendMessage(request: ChatRequest): Promise<ChatResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/chat/message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+    return handleResponse<ChatResponse>(response);
+  },
+
+  async listConversations(projectId?: string, limit = 50): Promise<Conversation[]> {
+    const params = new URLSearchParams();
+    if (projectId) params.append('project_id', projectId);
+    params.append('limit', String(limit));
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/chat/conversations?${params}`
+    );
+    return handleResponse<Conversation[]>(response);
+  },
+
+  async getConversation(conversationId: string): Promise<ConversationWithMessages> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/chat/conversations/${conversationId}`
+    );
+    return handleResponse<ConversationWithMessages>(response);
+  },
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/chat/conversations/${conversationId}`,
+      { method: 'DELETE' }
+    );
+    return handleResponse<void>(response);
+  },
+
+  // ============== LLM Settings ==============
+
+  async getLLMSettings(): Promise<LLMSettings> {
+    const response = await fetch(`${API_BASE_URL}/api/settings/llm`);
+    return handleResponse<LLMSettings>(response);
+  },
+
+  async updateLLMSettings(settings: LLMSettingsUpdate): Promise<LLMSettings> {
+    const response = await fetch(`${API_BASE_URL}/api/settings/llm`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(settings),
+    });
+    return handleResponse<LLMSettings>(response);
+  },
+
+  async validateLLMApiKey(provider: string): Promise<ApiKeyValidation> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/settings/llm/${provider}/validate`,
+      { method: 'POST' }
+    );
+    return handleResponse<ApiKeyValidation>(response);
+  },
 };
+
+// ============== Streaming Chat ==============
+
+export async function* streamChatMessage(
+  request: ChatRequest
+): AsyncGenerator<StreamChunk, void, unknown> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiError(
+      response.status,
+      errorData.detail || `HTTP error ${response.status}`
+    );
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('No response body');
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE events
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (data) {
+            try {
+              const chunk = JSON.parse(data) as StreamChunk;
+              yield chunk;
+            } catch (e) {
+              console.error('Failed to parse SSE data:', data, e);
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// ============== Mentionable Items ==============
+
+export async function getMentionableItems(
+  projectId?: string,
+  query?: string
+): Promise<{
+  datasets: any[];
+  files: any[];
+  scripts: any[];
+}> {
+  const params = new URLSearchParams();
+  if (projectId) params.append('project_id', projectId);
+  if (query) params.append('query', query);
+
+  const response = await fetch(
+    `${API_BASE_URL}/api/chat/mentionables?${params}`
+  );
+  return handleResponse<{
+    datasets: any[];
+    files: any[];
+    scripts: any[];
+  }>(response);
+}
 
 export { ApiError };

@@ -1,7 +1,7 @@
-import { createContext, useContext, useReducer, useEffect } from 'react';
+import { createContext, useContext, useReducer, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import type { AppState, AppAction, FileNode, Message, TabType } from '../types';
-import { api } from '../services/api';
+import type { AppState, AppAction, FileNode, Message, TabType, MentionRef } from '../types';
+import { api, streamChatMessage } from '../services/api';
 
 // Constants
 const STORAGE_KEYS = {
@@ -88,10 +88,12 @@ const initialState: AppState = {
   files: mockFiles,
   sidebarCollapsed: false,
   sidebarWidth: getPersistedSidebarWidth(),
-  activeTab: 'chart',
+  activeTab: 'content',
   canvasContent: null,
   messages: initialMessages,
   isProcessing: false,
+  currentConversationId: null,
+  currentProvider: 'openai',
   analysisStatus: 'idle',
   currentDataSource: 'Study ABC-123',
   uploadModalOpen: false,
@@ -132,8 +134,25 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, canvasContent: action.payload };
     case 'ADD_MESSAGE':
       return { ...state, messages: [...state.messages, action.payload] };
+    case 'UPDATE_LAST_MESSAGE': {
+      const messages = [...state.messages];
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage && lastMessage.role === 'assistant') {
+        messages[messages.length - 1] = {
+          ...lastMessage,
+          content: lastMessage.content + action.payload.content,
+        };
+      }
+      return { ...state, messages };
+    }
     case 'SET_PROCESSING':
       return { ...state, isProcessing: action.payload };
+    case 'SET_CONVERSATION_ID':
+      return { ...state, currentConversationId: action.payload };
+    case 'SET_PROVIDER':
+      return { ...state, currentProvider: action.payload };
+    case 'CLEAR_MESSAGES':
+      return { ...state, messages: initialMessages, currentConversationId: null };
     case 'SET_ANALYSIS_STATUS':
       return { ...state, analysisStatus: action.payload };
     case 'SET_DATA_SOURCE':
@@ -180,7 +199,9 @@ interface AppContextValue {
   toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
   setActiveTab: (tab: TabType) => void;
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, mentions?: MentionRef[]) => Promise<void>;
+  clearChat: () => void;
+  setProvider: (provider: string) => void;
   openUploadModal: () => void;
   closeUploadModal: () => void;
   loadDatasets: () => Promise<void>;
@@ -223,7 +244,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_ACTIVE_TAB', payload: tab });
   };
 
-  const sendMessage = (content: string) => {
+  const sendMessage = useCallback(async (content: string, mentions: MentionRef[] = []) => {
     // Add user message
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -235,18 +256,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'ADD_MESSAGE', payload: userMessage });
     dispatch({ type: 'SET_PROCESSING', payload: true });
 
-    // Simulate AI response after delay
-    setTimeout(() => {
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: generateMockResponse(content),
-        timestamp: new Date(),
-        status: 'complete',
-      };
-      dispatch({ type: 'ADD_MESSAGE', payload: aiMessage });
+    // Create placeholder for assistant message
+    const assistantMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      status: 'pending',
+    };
+    dispatch({ type: 'ADD_MESSAGE', payload: assistantMessage });
+
+    try {
+      // Try streaming API first
+      const stream = streamChatMessage({
+        message: content,
+        mentions,
+        conversation_id: state.currentConversationId || undefined,
+        provider: state.currentProvider,
+        project_id: state.currentProjectId || undefined,
+        stream: true,
+      });
+
+      for await (const chunk of stream) {
+        if (chunk.type === 'content' && chunk.content) {
+          dispatch({ type: 'UPDATE_LAST_MESSAGE', payload: { content: chunk.content } });
+        } else if (chunk.type === 'done') {
+          // Update conversation ID if new
+          if (chunk.conversation_id && !state.currentConversationId) {
+            dispatch({ type: 'SET_CONVERSATION_ID', payload: chunk.conversation_id });
+          }
+        } else if (chunk.type === 'error') {
+          throw new Error(chunk.error || 'Streaming error');
+        }
+      }
+
       dispatch({ type: 'SET_PROCESSING', payload: false });
-    }, 1500);
+    } catch (error) {
+      console.error('Chat error:', error);
+      // Fall back to mock response if API fails
+      const errorMessage = error instanceof Error ? error.message : 'An error occurred';
+
+      // Update assistant message with error or fallback
+      dispatch({
+        type: 'UPDATE_LAST_MESSAGE',
+        payload: {
+          content: `[API Error: ${errorMessage}]\n\n${generateMockResponse(content)}`,
+        },
+      });
+      dispatch({ type: 'SET_PROCESSING', payload: false });
+    }
+  }, [state.currentConversationId, state.currentProvider, state.currentProjectId]);
+
+  const clearChat = () => {
+    dispatch({ type: 'CLEAR_MESSAGES' });
+  };
+
+  const setProvider = (provider: string) => {
+    dispatch({ type: 'SET_PROVIDER', payload: provider });
   };
 
   const openUploadModal = () => {
@@ -310,6 +376,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const viewDatasetMetadata = async (datasetId: string) => {
+    // Clear other selections when viewing dataset metadata
+    dispatch({ type: 'SET_SELECTED_SCRIPT', payload: null });
     dispatch({ type: 'SET_SELECTED_DATASET', payload: datasetId });
     dispatch({ type: 'SET_METADATA_LOADING', payload: true });
     dispatch({ type: 'SET_ACTIVE_TAB', payload: 'metadata' });
@@ -335,8 +403,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const viewScript = (scriptId: string) => {
+    // Clear other selections when viewing a script
+    dispatch({ type: 'SET_SELECTED_FILE_PREVIEW', payload: null });
+    dispatch({ type: 'SET_SELECTED_DATASET', payload: null });
+    dispatch({ type: 'SET_METADATA_DATA', payload: null });
     dispatch({ type: 'SET_SELECTED_SCRIPT', payload: scriptId });
-    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'script' });
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'content' });
   };
 
   const updateScript = async (scriptId: string, data: Partial<import('../types').ScriptCreate>) => {
@@ -380,9 +452,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const viewFile = async (datasetId: string, fileId: string, fileName: string, fileType: string) => {
+    // Clear other selections when viewing a file
+    dispatch({ type: 'SET_SELECTED_SCRIPT', payload: null });
     dispatch({ type: 'SET_SELECTED_FILE_PREVIEW', payload: { datasetId, fileId, fileName, fileType } });
+    dispatch({ type: 'SET_SELECTED_DATASET', payload: datasetId }); // Set dataset for metadata tab
     dispatch({ type: 'SET_FILE_PREVIEW_LOADING', payload: true });
-    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'file' });
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'content' });
 
     try {
       // Only fetch preview for tabular file types
@@ -398,6 +473,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'SET_FILE_PREVIEW_DATA', payload: null });
     } finally {
       dispatch({ type: 'SET_FILE_PREVIEW_LOADING', payload: false });
+    }
+
+    // Also fetch metadata for the dataset (for Metadata tab)
+    try {
+      const metadataData = await api.getDatasetLineage(datasetId);
+      dispatch({ type: 'SET_METADATA_DATA', payload: metadataData });
+    } catch (error) {
+      console.error('Failed to load metadata:', error);
+      dispatch({ type: 'SET_METADATA_DATA', payload: null });
     }
   };
 
@@ -426,6 +510,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSidebarWidth,
         setActiveTab,
         sendMessage,
+        clearChat,
+        setProvider,
         openUploadModal,
         closeUploadModal,
         loadDatasets,

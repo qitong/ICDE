@@ -1,14 +1,10 @@
-import { BarChart3, Table2, FileText, Code, GitBranch, FileCode } from 'lucide-react';
+import { FileText, GitBranch } from 'lucide-react';
 import type { TabType } from '../../types';
 import { useApp } from '../../contexts/AppContext';
 
-const tabs: { type: TabType; label: string; icon: typeof BarChart3 }[] = [
-  { type: 'chart', label: 'Chart', icon: BarChart3 },
-  { type: 'table', label: 'Table', icon: Table2 },
-  { type: 'text', label: 'Text', icon: FileText },
-  { type: 'code', label: 'Code', icon: Code },
+const tabs: { type: TabType; label: string; icon: typeof FileText }[] = [
+  { type: 'content', label: 'Content', icon: FileText },
   { type: 'metadata', label: 'Metadata', icon: GitBranch },
-  { type: 'script', label: 'Script', icon: FileCode },
 ];
 
 export function TabBar() {

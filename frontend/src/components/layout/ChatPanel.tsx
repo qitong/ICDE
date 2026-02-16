@@ -1,9 +1,14 @@
-
+import { useState } from 'react';
 import { MessageList } from '../chat/MessageList';
 import { ChatInput } from '../chat/ChatInput';
-import { Bot, Sparkles, Settings } from 'lucide-react';
+import { LLMSettingsModal } from '../modals/LLMSettingsModal';
+import { Bot, Sparkles, Settings, RefreshCw } from 'lucide-react';
+import { useApp } from '../../contexts/AppContext';
 
 export function ChatPanel() {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { clearChat, state } = useApp();
+
   return (
     <aside className="w-[360px] h-full bg-background border-l border-border flex flex-col">
       {/* Panel header */}
@@ -16,9 +21,17 @@ export function ChatPanel() {
             <h2 className="text-sm font-display font-semibold text-foreground">
               AI Assistant
             </h2>
+            <p className="text-xs text-muted capitalize">{state.currentProvider}</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={clearChat}
+            className="p-2 text-muted hover:text-foreground hover:bg-surface rounded-lg transition-colors"
+            title="New conversation"
+          >
+            <RefreshCw size={16} />
+          </button>
           <button
             className="p-2 text-muted hover:text-foreground hover:bg-surface rounded-lg transition-colors"
             title="Capabilities"
@@ -26,8 +39,9 @@ export function ChatPanel() {
             <Sparkles size={16} />
           </button>
           <button
+            onClick={() => setSettingsOpen(true)}
             className="p-2 text-muted hover:text-foreground hover:bg-surface rounded-lg transition-colors"
-            title="Settings"
+            title="LLM Settings"
           >
             <Settings size={16} />
           </button>
@@ -38,7 +52,13 @@ export function ChatPanel() {
       <MessageList />
 
       {/* Input area */}
-      <ChatInput />
+      <ChatInput onOpenSettings={() => setSettingsOpen(true)} />
+
+      {/* Settings modal */}
+      <LLMSettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
     </aside>
   );
 }

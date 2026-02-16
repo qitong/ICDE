@@ -17,6 +17,7 @@ from ..schemas.dataset import (
     DatasetListResponse,
     DatasetFileResponse,
     FilePreview,
+    SetRelationshipRequest,
 )
 from ..schemas.script import DeriveDatasetRequest
 from ..services.file_parser import FileParser
@@ -192,6 +193,87 @@ async def get_file_preview(
         raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
 
 
+@router.post("/{dataset_id}/files/{file_id}/reparse", response_model=DatasetFileResponse)
+async def reparse_file(
+    dataset_id: str,
+    file_id: str,
+    db: Session = Depends(get_db),
+):
+    """Re-parse a file that previously failed or needs updating."""
+    dataset_file = (
+        db.query(DatasetFile)
+        .filter(DatasetFile.id == file_id, DatasetFile.dataset_id == dataset_id)
+        .first()
+    )
+
+    if not dataset_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = Path(dataset_file.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    # Re-parse the file
+    try:
+        row_count, column_count, columns, column_info_json = FileParser.parse_file(file_path)
+        dataset_file.row_count = row_count
+        dataset_file.column_count = column_count
+        dataset_file.column_info = column_info_json
+        dataset_file.parse_status = "parsed"
+        dataset_file.parse_error = None
+    except Exception as e:
+        dataset_file.parse_status = "error"
+        dataset_file.parse_error = str(e)
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"File parsing failed: {str(e)}")
+
+    db.commit()
+    db.refresh(dataset_file)
+
+    return dataset_file
+
+
+@router.post("/{dataset_id}/reparse-all", response_model=List[DatasetFileResponse])
+async def reparse_all_files(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+):
+    """Re-parse all files in a dataset."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    files = db.query(DatasetFile).filter(DatasetFile.dataset_id == dataset_id).all()
+
+    results = []
+    for dataset_file in files:
+        file_path = Path(dataset_file.file_path)
+        if not file_path.exists():
+            dataset_file.parse_status = "error"
+            dataset_file.parse_error = "File not found on disk"
+            results.append(dataset_file)
+            continue
+
+        try:
+            row_count, column_count, columns, column_info_json = FileParser.parse_file(file_path)
+            dataset_file.row_count = row_count
+            dataset_file.column_count = column_count
+            dataset_file.column_info = column_info_json
+            dataset_file.parse_status = "parsed"
+            dataset_file.parse_error = None
+        except Exception as e:
+            dataset_file.parse_status = "error"
+            dataset_file.parse_error = str(e)
+
+        results.append(dataset_file)
+
+    db.commit()
+    for f in results:
+        db.refresh(f)
+
+    return results
+
+
 @router.delete("/{dataset_id}", status_code=204)
 async def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
     """Delete a dataset and all its files."""
@@ -209,6 +291,69 @@ async def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
     db.commit()
 
     return None
+
+
+@router.put("/{dataset_id}/relationship", response_model=DatasetResponse)
+async def set_dataset_relationship(
+    dataset_id: str,
+    request: SetRelationshipRequest,
+    db: Session = Depends(get_db),
+):
+    """Set relationship for a dataset (version or derived)."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    if request.relationship_type == "none":
+        # Clear any existing relationships
+        dataset.parent_dataset_id = None
+        dataset.source_dataset_id = None
+        dataset.is_manual = False
+        dataset.type = DatasetType.RAW
+
+    elif request.relationship_type == "version":
+        # Set as new version of parent dataset
+        if not request.parent_dataset_id:
+            raise HTTPException(
+                status_code=400,
+                detail="parent_dataset_id is required for version relationship"
+            )
+        parent = db.query(Dataset).filter(Dataset.id == request.parent_dataset_id).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent dataset not found")
+
+        dataset.parent_dataset_id = request.parent_dataset_id
+        dataset.source_dataset_id = None
+        dataset.is_manual = False
+        dataset.type = DatasetType.RAW
+        if request.version_name:
+            dataset.version_name = request.version_name
+
+    elif request.relationship_type == "derived":
+        # Set as derived from source dataset
+        if not request.source_dataset_id:
+            raise HTTPException(
+                status_code=400,
+                detail="source_dataset_id is required for derived relationship"
+            )
+        source = db.query(Dataset).filter(Dataset.id == request.source_dataset_id).first()
+        if not source:
+            raise HTTPException(status_code=404, detail="Source dataset not found")
+
+        dataset.source_dataset_id = request.source_dataset_id
+        dataset.parent_dataset_id = None
+        dataset.is_manual = request.is_manual
+        dataset.type = DatasetType.DERIVED
+        dataset.script_id = None  # Manual upload, no script
+
+    # Update description if provided
+    if request.description:
+        dataset.description = request.description
+
+    db.commit()
+    db.refresh(dataset)
+
+    return dataset
 
 
 @router.get("/{dataset_id}/versions", response_model=List[DatasetResponse])
