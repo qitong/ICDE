@@ -281,7 +281,9 @@ async def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    # Delete folder from disk
+    # Delete folder from disk (restore write permissions first if RAW files were locked 0o444)
+    from ..harness.workspace_guard import WorkspaceGuard
+    WorkspaceGuard.unlock_for_deletion(dataset)
     folder_path = Path(dataset.folder_path)
     if folder_path.exists():
         shutil.rmtree(folder_path)

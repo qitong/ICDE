@@ -8,6 +8,52 @@ export interface FileNode {
   fileType?: 'dataset' | 'analysis' | 'script' | 'output';
 }
 
+// Harness Tool Call & Clinical Approval Types
+export type ToolCallStatus = 'started' | 'completed' | 'error';
+
+export interface ToolCallItem {
+  call_id: string;
+  tool_name: string;
+  status: ToolCallStatus;
+  summary: string;
+  arguments?: Record<string, unknown>;
+  output?: unknown;
+  duration_ms?: number;
+}
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export interface ApprovalItem {
+  approval_id: string;
+  action: string;
+  title: string;
+  summary: string;
+  options: string[];
+  status: ApprovalStatus;
+  selected_option?: string;
+  comment?: string;
+}
+
+export type WorkspaceEventName =
+  | 'dataset_derived'
+  | 'script_saved'
+  | 'lineage_updated'
+  | 'canvas_updated';
+
+export interface HarnessStatus {
+  harness: string;
+  available: boolean;
+  mode: 'remote_server' | 'local_binary' | 'mock_transport' | 'unavailable';
+  server_url?: string | null;
+  binary_path?: string | null;
+  mcp_server: string;
+  mcp_tools: string[];
+  raw_guard_enabled: boolean;
+  protected_raw_datasets: number;
+  configured_providers: string[];
+  diagnostic?: string | null;
+}
+
 // Message Types
 export interface Message {
   id: string;
@@ -15,6 +61,8 @@ export interface Message {
   content: string;
   timestamp: Date;
   status?: 'pending' | 'complete' | 'error';
+  toolCalls?: ToolCallItem[];
+  approvals?: ApprovalItem[];
 }
 
 // Tab Types
@@ -98,6 +146,17 @@ export type AppAction =
   | { type: 'SET_CANVAS_CONTENT'; payload: CanvasContent }
   | { type: 'ADD_MESSAGE'; payload: Message }
   | { type: 'UPDATE_LAST_MESSAGE'; payload: { content: string } }
+  | { type: 'COMPLETE_LAST_MESSAGE' }
+  | { type: 'UPSERT_LAST_MESSAGE_TOOL_CALL'; payload: ToolCallItem }
+  | { type: 'UPSERT_LAST_MESSAGE_APPROVAL'; payload: ApprovalItem }
+  | {
+      type: 'UPDATE_APPROVAL_STATUS';
+      payload: {
+        approval_id: string;
+        status: ApprovalStatus;
+        selected_option?: string;
+      };
+    }
   | { type: 'SET_PROCESSING'; payload: boolean }
   | { type: 'SET_CONVERSATION_ID'; payload: string | null }
   | { type: 'SET_PROVIDER'; payload: string }
@@ -384,6 +443,7 @@ export interface ChatRequest {
   provider?: string;
   project_id?: string;
   stream?: boolean;
+  mode?: 'chat' | 'harness';
 }
 
 // Chat response from API (non-streaming)
@@ -400,13 +460,43 @@ export interface ChatResponse {
   };
 }
 
-// Stream chunk from SSE
+// Stream chunk from SSE (supports both standard chat and structured HarnessEvent frames)
 export interface StreamChunk {
-  type: 'content' | 'done' | 'error';
+  type:
+    | 'content'
+    | 'text_delta'
+    | 'tool_call'
+    | 'approval_required'
+    | 'workspace_event'
+    | 'done'
+    | 'error';
   content?: string;
+  delta?: string;
   conversation_id?: string;
   message_id?: string;
   error?: string;
+  code?: string;
+
+  // tool_call fields
+  call_id?: string;
+  tool_name?: string;
+  status?: string;
+  summary?: string;
+  arguments?: Record<string, unknown>;
+  output?: unknown;
+  duration_ms?: number;
+
+  // approval_required fields
+  approval_id?: string;
+  action?: string;
+  title?: string;
+  options?: string[];
+
+  // workspace_event fields
+  event_name?: WorkspaceEventName;
+  dataset_id?: string;
+  script_id?: string;
+  payload?: Record<string, unknown>;
 }
 
 // Conversation summary

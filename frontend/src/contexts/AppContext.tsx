@@ -1,6 +1,14 @@
 import { createContext, useContext, useReducer, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import type { AppState, AppAction, FileNode, Message, TabType, MentionRef } from '../types';
+import type {
+  AppState,
+  AppAction,
+  FileNode,
+  Message,
+  TabType,
+  MentionRef,
+  ToolCallStatus,
+} from '../types';
 import { api, streamChatMessage } from '../services/api';
 
 // Constants
@@ -145,6 +153,73 @@ function appReducer(state: AppState, action: AppAction): AppState {
       }
       return { ...state, messages };
     }
+    case 'COMPLETE_LAST_MESSAGE': {
+      const messages = [...state.messages];
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage && lastMessage.role === 'assistant') {
+        messages[messages.length - 1] = {
+          ...lastMessage,
+          status: 'complete',
+        };
+      }
+      return { ...state, messages };
+    }
+    case 'UPSERT_LAST_MESSAGE_TOOL_CALL': {
+      const messages = [...state.messages];
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage && lastMessage.role === 'assistant') {
+        const existingCalls = lastMessage.toolCalls ? [...lastMessage.toolCalls] : [];
+        const idx = existingCalls.findIndex((c) => c.call_id === action.payload.call_id);
+        if (idx >= 0) {
+          existingCalls[idx] = { ...existingCalls[idx], ...action.payload };
+        } else {
+          existingCalls.push(action.payload);
+        }
+        messages[messages.length - 1] = {
+          ...lastMessage,
+          toolCalls: existingCalls,
+        };
+      }
+      return { ...state, messages };
+    }
+    case 'UPSERT_LAST_MESSAGE_APPROVAL': {
+      const messages = [...state.messages];
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage && lastMessage.role === 'assistant') {
+        const existingApprovals = lastMessage.approvals ? [...lastMessage.approvals] : [];
+        const idx = existingApprovals.findIndex(
+          (a) => a.approval_id === action.payload.approval_id
+        );
+        if (idx >= 0) {
+          existingApprovals[idx] = { ...existingApprovals[idx], ...action.payload };
+        } else {
+          existingApprovals.push(action.payload);
+        }
+        messages[messages.length - 1] = {
+          ...lastMessage,
+          approvals: existingApprovals,
+        };
+      }
+      return { ...state, messages };
+    }
+    case 'UPDATE_APPROVAL_STATUS': {
+      const messages = state.messages.map((msg) => {
+        if (!msg.approvals || msg.approvals.length === 0) return msg;
+        return {
+          ...msg,
+          approvals: msg.approvals.map((appr) =>
+            appr.approval_id === action.payload.approval_id
+              ? {
+                  ...appr,
+                  status: action.payload.status,
+                  selected_option: action.payload.selected_option ?? appr.selected_option,
+                }
+              : appr
+          ),
+        };
+      });
+      return { ...state, messages };
+    }
     case 'SET_PROCESSING':
       return { ...state, isProcessing: action.payload };
     case 'SET_CONVERSATION_ID':
@@ -200,6 +275,11 @@ interface AppContextValue {
   setSidebarWidth: (width: number) => void;
   setActiveTab: (tab: TabType) => void;
   sendMessage: (content: string, mentions?: MentionRef[]) => Promise<void>;
+  resolveApproval: (
+    approvalId: string,
+    decision: 'approved' | 'rejected',
+    selectedOption?: string
+  ) => Promise<void>;
   clearChat: () => void;
   setProvider: (provider: string) => void;
   openUploadModal: () => void;
@@ -267,7 +347,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'ADD_MESSAGE', payload: assistantMessage });
 
     try {
-      // Try streaming API first
+      // Try streaming API first (harness mode with automatic backend fallback)
       const stream = streamChatMessage({
         message: content,
         mentions,
@@ -275,21 +355,83 @@ export function AppProvider({ children }: { children: ReactNode }) {
         provider: state.currentProvider,
         project_id: state.currentProjectId || undefined,
         stream: true,
+        mode: 'harness',
       });
 
       for await (const chunk of stream) {
-        if (chunk.type === 'content' && chunk.content) {
-          dispatch({ type: 'UPDATE_LAST_MESSAGE', payload: { content: chunk.content } });
+        if ((chunk.type === 'content' || chunk.type === 'text_delta') && (chunk.content || chunk.delta)) {
+          dispatch({
+            type: 'UPDATE_LAST_MESSAGE',
+            payload: { content: (chunk.content ?? chunk.delta) || '' },
+          });
+        } else if (chunk.type === 'tool_call' && chunk.call_id && chunk.tool_name) {
+          const normStatus: ToolCallStatus =
+            chunk.status === 'completed'
+              ? 'completed'
+              : chunk.status === 'error'
+              ? 'error'
+              : 'started';
+          dispatch({
+            type: 'UPSERT_LAST_MESSAGE_TOOL_CALL',
+            payload: {
+              call_id: chunk.call_id,
+              tool_name: chunk.tool_name,
+              status: normStatus,
+              summary: chunk.summary || `${chunk.tool_name} (${normStatus})`,
+              arguments: chunk.arguments,
+              output: chunk.output,
+              duration_ms: chunk.duration_ms,
+            },
+          });
+        } else if (chunk.type === 'approval_required' && chunk.approval_id) {
+          dispatch({
+            type: 'UPSERT_LAST_MESSAGE_APPROVAL',
+            payload: {
+              approval_id: chunk.approval_id,
+              action: chunk.action || 'clinical_confirmation',
+              title: chunk.title || 'Confirmation Required',
+              summary: chunk.summary || '',
+              options: chunk.options && chunk.options.length > 0 ? chunk.options : ['Approve', 'Reject'],
+              status: 'pending',
+            },
+          });
+        } else if (chunk.type === 'workspace_event') {
+          if (
+            chunk.event_name === 'dataset_derived' ||
+            chunk.event_name === 'lineage_updated' ||
+            chunk.event_name === 'canvas_updated'
+          ) {
+            void api.listDatasets().then((datasets) => {
+              dispatch({ type: 'SET_DATASETS', payload: datasets });
+            });
+            if (state.currentProjectId) {
+              void api.getProjectTree(state.currentProjectId).then((tree) => {
+                dispatch({ type: 'SET_PROJECT_TREE', payload: tree });
+              });
+            }
+            const lineageTarget = state.selectedDatasetId || chunk.dataset_id;
+            if (lineageTarget && state.selectedDatasetId) {
+              void api.getDatasetLineage(state.selectedDatasetId).then((meta) => {
+                dispatch({ type: 'SET_METADATA_DATA', payload: meta });
+              });
+            }
+          }
+          if (chunk.event_name === 'script_saved' || chunk.event_name === 'canvas_updated') {
+            void api.listScripts().then((scripts) => {
+              dispatch({ type: 'SET_SCRIPTS', payload: scripts });
+            });
+          }
         } else if (chunk.type === 'done') {
-          // Update conversation ID if new
           if (chunk.conversation_id && !state.currentConversationId) {
             dispatch({ type: 'SET_CONVERSATION_ID', payload: chunk.conversation_id });
           }
+          dispatch({ type: 'COMPLETE_LAST_MESSAGE' });
         } else if (chunk.type === 'error') {
           throw new Error(chunk.error || 'Streaming error');
         }
       }
 
+      dispatch({ type: 'COMPLETE_LAST_MESSAGE' });
       dispatch({ type: 'SET_PROCESSING', payload: false });
     } catch (error) {
       console.error('Chat error:', error);
@@ -305,7 +447,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       dispatch({ type: 'SET_PROCESSING', payload: false });
     }
-  }, [state.currentConversationId, state.currentProvider, state.currentProjectId]);
+  }, [
+    state.currentConversationId,
+    state.currentProvider,
+    state.currentProjectId,
+    state.selectedDatasetId,
+  ]);
+
+  const resolveApproval = useCallback(
+    async (
+      approvalId: string,
+      decision: 'approved' | 'rejected',
+      selectedOption?: string
+    ) => {
+      const updated = await api.resolveHarnessApproval(approvalId, {
+        decision,
+        selected_option: selectedOption,
+      });
+      dispatch({
+        type: 'UPDATE_APPROVAL_STATUS',
+        payload: {
+          approval_id: approvalId,
+          status: updated.status,
+          selected_option: updated.selected_option,
+        },
+      });
+    },
+    []
+  );
 
   const clearChat = () => {
     dispatch({ type: 'CLEAR_MESSAGES' });
@@ -490,6 +659,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadDatasets();
     loadProjects();
     loadScripts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load project tree when current project changes
@@ -497,6 +667,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (state.currentProjectId) {
       loadProjectTree();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.currentProjectId]);
 
   return (
@@ -510,6 +681,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSidebarWidth,
         setActiveTab,
         sendMessage,
+        resolveApproval,
         clearChat,
         setProvider,
         openUploadModal,
@@ -532,6 +704,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useApp() {
   const context = useContext(AppContext);
   if (!context) {

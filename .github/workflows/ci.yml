@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (Python 3.11 & Pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run pytest suite
+        working-directory: backend
+        run: pytest
+
+      - name: Verify workspace & upload directory cleanliness
+        run: |
+          upload_artifacts="$(find backend/uploads -mindepth 1 ! -name '.gitkeep')"
+          if [ -n "$upload_artifacts" ]; then
+            echo "Unexpected test artifacts in backend/uploads:"
+            echo "$upload_artifacts"
+            exit 1
+          fi
+          if [ -f "backend/.icde_secret_key" ]; then
+            echo "Unexpected secret key file created at backend/.icde_secret_key"
+            exit 1
+          fi
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "Working tree is dirty after running tests:"
+            echo "$dirty"
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend (Node 20 Lint & Build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Build & Typecheck (tsc -b && vite build)
+        run: npm run build

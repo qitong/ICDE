@@ -80,6 +80,7 @@ class ChatRequest(BaseModel):
     provider: str = "openai"  # kimi | gemini | claude | openai
     project_id: Optional[str] = None
     stream: bool = True  # Whether to use streaming response
+    mode: Optional[Literal["chat", "harness"]] = None  # Optional harness execution mode
 
 
 class ChatResponse(BaseModel):
@@ -94,7 +95,15 @@ class ChatResponse(BaseModel):
 
 class StreamChunk(BaseModel):
     """Schema for streaming response chunks."""
-    type: Literal["content", "done", "error"]
+    type: Literal[
+        "content",
+        "text_delta",
+        "tool_call",
+        "approval_required",
+        "workspace_event",
+        "done",
+        "error",
+    ]
     content: Optional[str] = None
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None

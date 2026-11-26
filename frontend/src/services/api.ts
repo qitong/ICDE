@@ -18,6 +18,8 @@ import type {
   LLMSettings,
   LLMSettingsUpdate,
   ApiKeyValidation,
+  HarnessStatus,
+  ApprovalItem,
 } from '../types';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -344,6 +346,34 @@ export const api = {
     );
     return handleResponse<ApiKeyValidation>(response);
   },
+
+  // ============== Agent Harness ==============
+
+  async getHarnessStatus(): Promise<HarnessStatus> {
+    const response = await fetch(`${API_BASE_URL}/api/harness/status`);
+    return handleResponse<HarnessStatus>(response);
+  },
+
+  async resolveHarnessApproval(
+    approvalId: string,
+    payload: {
+      decision: 'approved' | 'rejected';
+      selected_option?: string;
+      comment?: string;
+    }
+  ): Promise<ApprovalItem> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/harness/approvals/${encodeURIComponent(approvalId)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+    return handleResponse<ApprovalItem>(response);
+  },
 };
 
 // ============== Streaming Chat ==============
@@ -407,13 +437,27 @@ export async function* streamChatMessage(
 
 // ============== Mentionable Items ==============
 
+interface MentionableApiItem {
+  id: string;
+  name: string;
+  path: string;
+  display_name?: string;
+  row_count?: number;
+  column_count?: number;
+  study_name?: string;
+  version_name?: string;
+  file_type?: string;
+  description?: string;
+  language?: string;
+}
+
 export async function getMentionableItems(
   projectId?: string,
   query?: string
 ): Promise<{
-  datasets: any[];
-  files: any[];
-  scripts: any[];
+  datasets: MentionableApiItem[];
+  files: MentionableApiItem[];
+  scripts: MentionableApiItem[];
 }> {
   const params = new URLSearchParams();
   if (projectId) params.append('project_id', projectId);
@@ -423,9 +467,9 @@ export async function getMentionableItems(
     `${API_BASE_URL}/api/chat/mentionables?${params}`
   );
   return handleResponse<{
-    datasets: any[];
-    files: any[];
-    scripts: any[];
+    datasets: MentionableApiItem[];
+    files: MentionableApiItem[];
+    scripts: MentionableApiItem[];
   }>(response);
 }
 
