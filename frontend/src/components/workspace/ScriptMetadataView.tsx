@@ -11,7 +11,7 @@ import {
   X,
   Tag,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { Script, ScriptCreate } from '../../types';
 
 interface ScriptMetadataViewProps {
@@ -31,12 +31,15 @@ export function ScriptMetadataView({ script: propScript }: ScriptMetadataViewPro
   const [editedUseCases, setEditedUseCases] = useState<string[]>(selectedScript?.use_cases || []);
   const [newUseCase, setNewUseCase] = useState('');
 
-  // Update local state when script changes
-  useEffect(() => {
-    if (selectedScript) {
-      setEditedUseCases(selectedScript.use_cases || []);
-    }
-  }, [selectedScript?.id, selectedScript?.use_cases]);
+  // Sync local use cases state when selected script or its persisted use_cases change
+  const scriptSyncKey = selectedScript
+    ? `${selectedScript.id}:${JSON.stringify(selectedScript.use_cases ?? [])}`
+    : '';
+  const [prevScriptSyncKey, setPrevScriptSyncKey] = useState(scriptSyncKey);
+  if (prevScriptSyncKey !== scriptSyncKey) {
+    setPrevScriptSyncKey(scriptSyncKey);
+    setEditedUseCases(selectedScript?.use_cases || []);
+  }
 
   const handleUpdate = async (data: Partial<ScriptCreate>) => {
     if (!selectedScript) return;

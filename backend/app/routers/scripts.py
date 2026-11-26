@@ -14,6 +14,21 @@ from ..schemas.script import ScriptCreate, ScriptUpdate, ScriptResponse
 router = APIRouter(prefix="/api/scripts", tags=["scripts"])
 
 
+def _serialize_json_field(value) -> Optional[str]:
+    """Serialize Pydantic models, lists, or dicts into UTF-8 JSON strings."""
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return json.dumps(value.model_dump(), ensure_ascii=False)
+    if isinstance(value, list):
+        serialized = [
+            item.model_dump() if hasattr(item, "model_dump") else item
+            for item in value
+        ]
+        return json.dumps(serialized, ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=False)
+
+
 @router.post("", response_model=ScriptResponse, status_code=201)
 async def create_script(
     script_data: ScriptCreate,
@@ -25,20 +40,20 @@ async def create_script(
     if existing:
         raise HTTPException(status_code=400, detail="Script with this name already exists")
 
-    # Convert keywords to JSON string (preserve Unicode)
-    keywords_json = None
-    if script_data.keywords:
-        keywords_json = json.dumps(script_data.keywords, ensure_ascii=False)
-
     script = Script(
         name=script_data.name,
         display_name=script_data.display_name,
         description=script_data.description,
         code=script_data.code,
-        keywords=keywords_json,
+        keywords=_serialize_json_field(script_data.keywords) if script_data.keywords else None,
         language=script_data.language,
         input_requirements=script_data.input_requirements,
         output_description=script_data.output_description,
+        parameters_schema=_serialize_json_field(script_data.parameters_schema),
+        returns_schema=_serialize_json_field(script_data.returns_schema),
+        functions=_serialize_json_field(script_data.functions),
+        use_cases=_serialize_json_field(script_data.use_cases),
+        example_calls=_serialize_json_field(script_data.example_calls),
         created_by=script_data.created_by,
         created_from_prompt=script_data.created_from_prompt,
     )
@@ -109,11 +124,21 @@ async def update_script(
     if script_data.code is not None:
         script.code = script_data.code
     if script_data.keywords is not None:
-        script.keywords = json.dumps(script_data.keywords, ensure_ascii=False)
+        script.keywords = _serialize_json_field(script_data.keywords)
     if script_data.input_requirements is not None:
         script.input_requirements = script_data.input_requirements
     if script_data.output_description is not None:
         script.output_description = script_data.output_description
+    if script_data.parameters_schema is not None:
+        script.parameters_schema = _serialize_json_field(script_data.parameters_schema)
+    if script_data.returns_schema is not None:
+        script.returns_schema = _serialize_json_field(script_data.returns_schema)
+    if script_data.functions is not None:
+        script.functions = _serialize_json_field(script_data.functions)
+    if script_data.use_cases is not None:
+        script.use_cases = _serialize_json_field(script_data.use_cases)
+    if script_data.example_calls is not None:
+        script.example_calls = _serialize_json_field(script_data.example_calls)
 
     db.commit()
     db.refresh(script)

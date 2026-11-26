@@ -18,6 +18,7 @@ import type {
   LLMSettings,
   LLMSettingsUpdate,
   ApiKeyValidation,
+  MentionablesResponse,
 } from '../types';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -410,11 +411,7 @@ export async function* streamChatMessage(
 export async function getMentionableItems(
   projectId?: string,
   query?: string
-): Promise<{
-  datasets: any[];
-  files: any[];
-  scripts: any[];
-}> {
+): Promise<MentionablesResponse> {
   const params = new URLSearchParams();
   if (projectId) params.append('project_id', projectId);
   if (query) params.append('query', query);
@@ -422,11 +419,7 @@ export async function getMentionableItems(
   const response = await fetch(
     `${API_BASE_URL}/api/chat/mentionables?${params}`
   );
-  return handleResponse<{
-    datasets: any[];
-    files: any[];
-    scripts: any[];
-  }>(response);
+  return handleResponse<MentionablesResponse>(response);
 }
 
 export { ApiError };

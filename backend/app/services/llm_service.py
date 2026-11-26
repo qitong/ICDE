@@ -3,10 +3,12 @@
 import json
 import logging
 import os
+from pathlib import Path
 from typing import AsyncIterator, Dict, List, Optional, Type
 from cryptography.fernet import Fernet
 from sqlalchemy.orm import Session
 
+from app.config import BASE_DIR
 from app.models.chat import LLMSetting, Conversation, ChatMessage
 from app.models.dataset import Dataset, DatasetFile
 from app.models.script import Script
@@ -28,8 +30,46 @@ from app.services.llm_providers.base import LLMMessage
 
 logger = logging.getLogger(__name__)
 
-# Encryption key for API keys - in production, use environment variable
-ENCRYPTION_KEY = os.environ.get("LLM_ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Default persistent secret key file path when LLM_ENCRYPTION_KEY env var is not set
+SECRET_KEY_FILE: Path = BASE_DIR / ".icde_secret_key"
+
+
+def get_or_create_encryption_key(secret_key_file: Optional[Path] = None) -> bytes:
+    """Resolve the Fernet encryption key from env or a persistent 0o600 local key file."""
+    env_key = os.environ.get("LLM_ENCRYPTION_KEY", "").strip()
+    if env_key:
+        return env_key.encode()
+
+    if secret_key_file is not None:
+        key_path = Path(secret_key_file)
+    elif os.environ.get("LLM_SECRET_KEY_FILE"):
+        key_path = Path(os.environ["LLM_SECRET_KEY_FILE"])
+    else:
+        key_path = Path(SECRET_KEY_FILE)
+
+    if key_path.exists():
+        existing_key = key_path.read_text(encoding="utf-8").strip()
+        if existing_key:
+            try:
+                os.chmod(key_path, 0o600)
+            except OSError:
+                pass
+            key_bytes = existing_key.encode()
+            Fernet(key_bytes)  # Validate key format
+            return key_bytes
+
+    new_key = Fernet.generate_key()
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, new_key)
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+    return new_key
 
 
 class LLMService:
@@ -63,9 +103,9 @@ class LLMService:
         },
     }
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, secret_key_file: Optional[Path] = None):
         self.db = db
-        self._fernet = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
+        self._fernet = Fernet(get_or_create_encryption_key(secret_key_file=secret_key_file))
 
     # ============== Encryption ==============
 
@@ -161,12 +201,15 @@ class LLMService:
             setting.enabled = enabled
 
         if api_base_url is not None:
-            setting.api_base_url = api_base_url
+            setting.api_base_url = api_base_url or None
 
-        if is_default:
-            # Clear other defaults first
-            self.db.query(LLMSetting).filter(LLMSetting.provider != provider).update({"is_default": False})
-            setting.is_default = True
+        if is_default is not None:
+            if is_default:
+                # Clear other defaults first
+                self.db.query(LLMSetting).filter(LLMSetting.provider != provider).update({"is_default": False})
+                setting.is_default = True
+            else:
+                setting.is_default = False
 
         self.db.commit()
         self.db.refresh(setting)

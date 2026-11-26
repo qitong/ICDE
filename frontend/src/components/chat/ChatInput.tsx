@@ -46,7 +46,7 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
 
         // Flatten results
         const items: MentionableItem[] = [
-          ...result.datasets.map((d: any) => ({
+          ...result.datasets.map((d) => ({
             type: 'dataset' as const,
             id: d.id,
             name: d.name,
@@ -58,7 +58,7 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
               version_name: d.version_name,
             },
           })),
-          ...result.files.map((f: any) => ({
+          ...result.files.map((f) => ({
             type: 'file' as const,
             id: f.id,
             name: f.name,
@@ -69,7 +69,7 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
               file_type: f.file_type,
             },
           })),
-          ...result.scripts.map((s: any) => ({
+          ...result.scripts.map((s) => ({
             type: 'script' as const,
             id: s.id,
             name: s.display_name || s.name,

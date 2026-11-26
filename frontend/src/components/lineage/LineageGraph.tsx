@@ -36,14 +36,13 @@ const CENTER_X = 400;
 const CENTER_Y = 200;
 
 export function LineageGraph({ lineageData, datasets, onNodeClick }: LineageGraphProps) {
-  // Find dataset by ID to get stale status
-  const getDatasetStale = (id: string): boolean => {
-    const ds = datasets.find(d => d.id === id);
-    return ds?.is_stale ?? false;
-  };
-
   // Calculate node positions
   const { nodes, edges } = useMemo(() => {
+    const getDatasetStale = (id: string): boolean => {
+      const ds = datasets.find((d) => d.id === id);
+      return ds?.is_stale ?? false;
+    };
+
     const positionedNodes: PositionedNode[] = [];
     const positionedEdges: PositionedEdge[] = [];
 

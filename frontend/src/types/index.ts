@@ -376,6 +376,40 @@ export interface MentionableItem {
   };
 }
 
+export interface MentionableDatasetRaw {
+  id: string;
+  name: string;
+  path: string;
+  row_count?: number;
+  column_count?: number;
+  study_name?: string;
+  version_name?: string;
+}
+
+export interface MentionableFileRaw {
+  id: string;
+  name: string;
+  path: string;
+  row_count?: number;
+  column_count?: number;
+  file_type?: string;
+}
+
+export interface MentionableScriptRaw {
+  id: string;
+  name: string;
+  display_name?: string;
+  path: string;
+  description?: string;
+  language?: string;
+}
+
+export interface MentionablesResponse {
+  datasets: MentionableDatasetRaw[];
+  files: MentionableFileRaw[];
+  scripts: MentionableScriptRaw[];
+}
+
 // Chat request sent to API
 export interface ChatRequest {
   message: string;
@@ -480,4 +514,13 @@ export interface ApiKeyValidation {
   provider: string;
   valid: boolean;
   message: string;
+  base_url?: string | null;
+  model?: string | null;
+  debug?: {
+    masked_key: string;
+    base_url?: string | null;
+    model?: string | null;
+  };
+  error_type?: string;
+  error_detail?: string;
 }

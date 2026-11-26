@@ -22,7 +22,6 @@ export function DatasetRelationModal({
   const [parentDatasetId, setParentDatasetId] = useState<string>('');
   const [sourceDatasetId, setSourceDatasetId] = useState<string>('');
   const [versionName, setVersionName] = useState<string>('');
-  const [_derivedName, _setDerivedName] = useState<string>('');
   const [description, setDescription] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +38,6 @@ export function DatasetRelationModal({
       setParentDatasetId('');
       setSourceDatasetId('');
       setVersionName('');
-      _setDerivedName(dataset.name);
       setDescription(dataset.description || '');
       setError(null);
     }

@@ -1,6 +1,7 @@
 """Settings API endpoints for LLM configuration."""
 
 import logging
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,20 @@ from app.services.llm_service import LLMService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+def mask_api_key(api_key: Optional[str]) -> str:
+    """Mask an API key safely without exposing prefix characters."""
+    if not api_key or len(api_key) <= 8:
+        return "***"
+    return f"****{api_key[-4:]}"
+
+
+def _scrub_secret(text: str, raw_key: Optional[str], masked_key: str) -> str:
+    """Ensure a raw API key is never echoed in logs or error payloads."""
+    if raw_key and raw_key in text:
+        return text.replace(raw_key, masked_key)
+    return text
 
 
 def get_llm_service(db: Session = Depends(get_db)) -> LLMService:
@@ -110,25 +125,63 @@ async def validate_api_key(
     llm_service: LLMService = Depends(get_llm_service),
 ):
     """Validate the API key for a specific provider."""
+    llm_provider = None
+    masked_key = "***"
     try:
         llm_provider = llm_service.get_provider(provider)
+        masked_key = mask_api_key(llm_provider.api_key)
+        logger.info(
+            "Validating %s with key=%s, base_url=%s, model=%s",
+            provider,
+            masked_key,
+            llm_provider.api_base_url,
+            llm_provider.model,
+        )
+
         is_valid = await llm_provider.validate_api_key()
 
-        return {
+        response = {
             "provider": provider,
             "valid": is_valid,
             "message": "API key is valid" if is_valid else "API key validation failed",
+            "base_url": llm_provider.api_base_url,
+            "model": llm_provider.model,
+            "debug": {
+                "masked_key": masked_key,
+                "base_url": llm_provider.api_base_url,
+                "model": llm_provider.model,
+            },
         }
+        if not is_valid:
+            response["error_type"] = "AuthenticationError"
+            response["error_detail"] = "API key validation failed"
+        return response
     except ValueError as e:
+        logger.warning("Validation configuration error for %s: %s", provider, e)
         return {
             "provider": provider,
             "valid": False,
             "message": str(e),
+            "error_type": "ValueError",
+            "error_detail": str(e),
         }
     except Exception as e:
-        logger.error(f"Validation error for {provider}: {e}")
-        return {
+        raw_key = llm_provider.api_key if llm_provider else None
+        sanitized_detail = _scrub_secret(str(e), raw_key, masked_key)
+        logger.error("Validation error for %s (%s): %s", provider, type(e).__name__, sanitized_detail)
+        payload = {
             "provider": provider,
             "valid": False,
-            "message": f"Validation error: {str(e)}",
+            "message": f"Validation error: {sanitized_detail}",
+            "error_type": type(e).__name__,
+            "error_detail": sanitized_detail,
+            "base_url": llm_provider.api_base_url if llm_provider else None,
+            "model": llm_provider.model if llm_provider else None,
         }
+        if llm_provider is not None:
+            payload["debug"] = {
+                "masked_key": masked_key,
+                "base_url": llm_provider.api_base_url,
+                "model": llm_provider.model,
+            }
+        return payload
