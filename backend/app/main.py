@@ -2,7 +2,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import init_db
-from .routers import datasets_router, projects_router, scripts_router, chat_router, settings_router
+from .routers import (
+    datasets_router,
+    projects_router,
+    scripts_router,
+    chat_router,
+    settings_router,
+    harness_router,
+)
 
 app = FastAPI(
     title="ICDE API",
@@ -25,6 +32,7 @@ app.include_router(projects_router)
 app.include_router(scripts_router)
 app.include_router(chat_router)
 app.include_router(settings_router)
+app.include_router(harness_router)
 
 
 @app.on_event("startup")

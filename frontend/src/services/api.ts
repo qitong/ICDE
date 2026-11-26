@@ -1,3 +1,4 @@
+import type { ApprovalItem, HarnessStatus } from '../types';
 import type {
   Dataset,
   DatasetFile,
@@ -344,6 +345,34 @@ export const api = {
       { method: 'POST' }
     );
     return handleResponse<ApiKeyValidation>(response);
+  },
+
+  // ============== Agent Harness ==============
+
+  async getHarnessStatus(): Promise<HarnessStatus> {
+    const response = await fetch(`${API_BASE_URL}/api/harness/status`);
+    return handleResponse<HarnessStatus>(response);
+  },
+
+  async resolveHarnessApproval(
+    approvalId: string,
+    payload: {
+      decision: 'approved' | 'rejected';
+      selected_option?: string;
+      comment?: string;
+    }
+  ): Promise<ApprovalItem> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/harness/approvals/${encodeURIComponent(approvalId)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+    return handleResponse<ApprovalItem>(response);
   },
 };
 

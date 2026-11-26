@@ -8,6 +8,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.harness.protocol import HarnessTurnRequest, ICDEHarnessAdapter
+from app.routers.harness import get_harness_adapter
 from app.schemas.chat import (
     ChatRequest,
     ChatResponse,
@@ -69,11 +71,39 @@ async def send_message(
 @router.post("/stream")
 async def stream_message(
     request: ChatRequest,
+    db: Session = Depends(get_db),
     llm_service: LLMService = Depends(get_llm_service),
+    adapter: ICDEHarnessAdapter = Depends(get_harness_adapter),
 ):
     """
     Send a message and get a streaming SSE response.
+    Supports `mode="harness"` to route through `ICDEHarnessAdapter` with seamless fallback.
     """
+    if request.mode == "harness":
+        status = await adapter.health_status(db)
+        if status.available:
+            turn_req = HarnessTurnRequest(
+                message=request.message,
+                mentions=request.mentions,
+                conversation_id=request.conversation_id,
+                provider=request.provider,
+                project_id=request.project_id,
+            )
+
+            async def generate_harness():
+                async for event in adapter.stream_turn(turn_req, db):
+                    yield event.to_sse()
+
+            return StreamingResponse(
+                generate_harness(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
     async def generate():
         try:
             async for chunk, conversation_id, message_id in llm_service.stream_chat(
