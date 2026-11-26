@@ -29,6 +29,10 @@ uploads/*
 .DS_Store
 Thumbs.db
 
-# Environment
+# Environment & Secrets
 .env
 .env.local
+.icde_secret_key
+
+# Test cache
+.pytest_cache/

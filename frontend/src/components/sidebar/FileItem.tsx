@@ -22,26 +22,29 @@ export function FileItem({ node, level = 0 }: FileItemProps) {
   const isExpanded = state.expandedFolders.has(node.id);
   const isSelected = state.selectedFileId === node.id;
 
-  const getFileIcon = () => {
+  const iconClassName = isSelected ? 'text-primary' : 'text-muted';
+
+  const renderFileIcon = () => {
     if (node.type === 'folder') {
-      return isExpanded ? FolderOpen : Folder;
+      return isExpanded ? (
+        <FolderOpen size={16} strokeWidth={1.5} className={iconClassName} />
+      ) : (
+        <Folder size={16} strokeWidth={1.5} className={iconClassName} />
+      );
     }
 
     switch (node.fileType) {
       case 'dataset':
-        return Database;
+        return <Database size={16} strokeWidth={1.5} className={iconClassName} />;
       case 'analysis':
-        return FileSpreadsheet;
+        return <FileSpreadsheet size={16} strokeWidth={1.5} className={iconClassName} />;
       case 'script':
-        return FileCode;
+        return <FileCode size={16} strokeWidth={1.5} className={iconClassName} />;
       case 'output':
-        return FileOutput;
       default:
-        return FileOutput;
+        return <FileOutput size={16} strokeWidth={1.5} className={iconClassName} />;
     }
   };
-
-  const FileIcon = getFileIcon();
 
   const handleClick = () => {
     if (node.type === 'folder') {
@@ -76,11 +79,7 @@ export function FileItem({ node, level = 0 }: FileItemProps) {
         ) : (
           <span className="w-4" />
         )}
-        <FileIcon
-          size={16}
-          strokeWidth={1.5}
-          className={isSelected ? 'text-primary' : 'text-muted'}
-        />
+        {renderFileIcon()}
         <span className="truncate flex-1">{node.name}</span>
       </button>
 

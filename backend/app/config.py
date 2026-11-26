@@ -11,6 +11,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/icde.db")
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+# Persistent encryption key file for LLM API keys (fallback when LLM_ENCRYPTION_KEY env var is unset)
+SECRET_KEY_FILE = Path(os.getenv("LLM_SECRET_KEY_FILE", str(BASE_DIR / ".icde_secret_key")))
+
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 

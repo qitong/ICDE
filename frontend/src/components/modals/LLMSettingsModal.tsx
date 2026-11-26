@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, Check, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { api } from '../../services/api';
-import type { LLMSettings, ProviderConfig } from '../../types';
+import type { LLMSettings, LLMSettingUpdate, ProviderConfig } from '../../types';
 
 interface LLMSettingsModalProps {
   isOpen: boolean;
@@ -10,11 +10,13 @@ interface LLMSettingsModalProps {
 
 export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
   const [settings, setSettings] = useState<LLMSettings | null>(null);
+  const [initialSettings, setInitialSettings] = useState<LLMSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [validatingProvider, setValidatingProvider] = useState<string | null>(null);
   const [validationResults, setValidationResults] = useState<Record<string, boolean>>({});
+  const [validationMessages, setValidationMessages] = useState<Record<string, string>>({});
 
   // Track which API keys are being edited
   const [editingKeys, setEditingKeys] = useState<Record<string, string>>({});
@@ -33,6 +35,10 @@ export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
     try {
       const data = await api.getLLMSettings();
       setSettings(data);
+      setInitialSettings({
+        default_provider: data.default_provider,
+        providers: data.providers.map((p) => ({ ...p })),
+      });
     } catch (err) {
       setError('Failed to load LLM settings');
       console.error(err);
@@ -48,18 +54,38 @@ export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
     setError(null);
 
     try {
-      // Build update payload
-      const updates: Record<string, any> = {};
+      // Build update payload for any provider with key edits OR non-key field changes
+      const updates: Record<string, LLMSettingUpdate> = {};
+      const baselineMap = new Map(
+        (initialSettings?.providers ?? []).map((p) => [p.provider, p])
+      );
 
       for (const provider of settings.providers) {
-        const apiKey = editingKeys[provider.provider];
-        if (apiKey !== undefined) {
-          updates[provider.provider] = {
-            api_key: apiKey,
+        const editedKey = editingKeys[provider.provider];
+        const baseline = baselineMap.get(provider.provider);
+        const hasFieldChanges =
+          !baseline ||
+          baseline.model !== provider.model ||
+          baseline.enabled !== provider.enabled ||
+          baseline.is_default !== provider.is_default ||
+          (baseline.api_base_url ?? '') !== (provider.api_base_url ?? '');
+
+        if (editedKey !== undefined || hasFieldChanges) {
+          const providerUpdate: LLMSettingUpdate = {
             model: provider.model,
             enabled: provider.enabled,
             is_default: provider.is_default,
           };
+
+          if (provider.api_base_url !== undefined) {
+            providerUpdate.api_base_url = provider.api_base_url;
+          }
+
+          if (editedKey !== undefined) {
+            providerUpdate.api_key = editedKey;
+          }
+
+          updates[provider.provider] = providerUpdate;
         }
       }
 
@@ -85,17 +111,47 @@ export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
     try {
       const result = await api.validateLLMApiKey(provider);
       setValidationResults((prev) => ({ ...prev, [provider]: result.valid }));
-    } catch (err) {
+
+      const baseUrl = result.base_url ?? result.debug?.base_url;
+      const modelName = result.model ?? result.debug?.model;
+      const maskedKey = result.debug?.masked_key;
+      const contextParts = [
+        maskedKey ? `key: ${maskedKey}` : null,
+        baseUrl ? `url: ${baseUrl}` : null,
+        modelName ? `model: ${modelName}` : null,
+      ].filter((part): part is string => Boolean(part));
+
+      const errorHeader =
+        !result.valid && result.error_type ? `[${result.error_type}] ` : '';
+      const detailSuffix =
+        !result.valid &&
+        result.error_detail &&
+        !result.message.includes(result.error_detail)
+          ? ` — ${result.error_detail}`
+          : '';
+      const contextSuffix =
+        contextParts.length > 0 ? ` (${contextParts.join(', ')})` : '';
+
+      setValidationMessages((prev) => ({
+        ...prev,
+        [provider]: `${errorHeader}${result.message}${detailSuffix}${contextSuffix}`,
+      }));
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Validation failed';
       setValidationResults((prev) => ({ ...prev, [provider]: false }));
+      setValidationMessages((prev) => ({
+        ...prev,
+        [provider]: errMsg,
+      }));
     } finally {
       setValidatingProvider(null);
     }
   };
 
-  const handleProviderChange = (
+  const handleProviderChange = <K extends keyof ProviderConfig>(
     providerName: string,
-    field: keyof ProviderConfig,
-    value: any
+    field: K,
+    value: ProviderConfig[K]
   ) => {
     if (!settings) return;
 
@@ -122,11 +178,16 @@ export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
 
   const handleApiKeyChange = (provider: string, value: string) => {
     setEditingKeys((prev) => ({ ...prev, [provider]: value }));
-    // Clear validation result when key changes
+    // Clear validation result and message when key changes
     setValidationResults((prev) => {
       const newResults = { ...prev };
       delete newResults[provider];
       return newResults;
+    });
+    setValidationMessages((prev) => {
+      const newMessages = { ...prev };
+      delete newMessages[provider];
+      return newMessages;
     });
   };
 
@@ -284,6 +345,7 @@ export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
                         </button>
                       </div>
                       <button
+                        type="button"
                         onClick={() => handleValidateKey(provider.provider)}
                         disabled={
                           validatingProvider === provider.provider ||
@@ -312,15 +374,24 @@ export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
                         )}
                       </button>
                     </div>
-                    {provider.api_key_set && !editingKeys[provider.provider] && (
+                    {provider.api_key_set && editingKeys[provider.provider] === undefined && (
                       <p className="mt-1 text-xs text-success flex items-center gap-1">
                         <Check size={12} /> API key configured
+                      </p>
+                    )}
+                    {validationMessages[provider.provider] && (
+                      <p
+                        className={`mt-1 text-xs ${
+                          validationResults[provider.provider] ? 'text-success' : 'text-error'
+                        } break-all`}
+                      >
+                        {validationMessages[provider.provider]}
                       </p>
                     )}
                   </div>
 
                   {/* Model selector */}
-                  <div>
+                  <div className="mb-3">
                     <label className="block text-xs text-muted mb-1">Model</label>
                     <select
                       value={provider.model}
@@ -335,6 +406,26 @@ export function LLMSettingsModal({ isOpen, onClose }: LLMSettingsModalProps) {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  {/* Optional API Base URL */}
+                  <div>
+                    <label className="block text-xs text-muted mb-1">
+                      API Base URL (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={provider.api_base_url || ''}
+                      onChange={(e) =>
+                        handleProviderChange(
+                          provider.provider,
+                          'api_base_url',
+                          e.target.value
+                        )
+                      }
+                      placeholder="Default provider endpoint"
+                      className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-primary"
+                    />
                   </div>
                 </div>
               ))}

@@ -3,23 +3,46 @@ Pytest fixtures for ICDE backend tests.
 """
 import os
 import tempfile
-import pytest
 from pathlib import Path
-from sqlalchemy import create_engine, event
+import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+# Ensure any default engine initialization uses in-memory SQLite rather than icde.db
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+
 from app.models.base import Base
 # Import all models to ensure they're registered with Base.metadata
-from app.models.dataset import Dataset, DatasetFile, DatasetLineage, DatasetType
-from app.models.script import Script
-from app.config import UPLOAD_DIR
+from app.models.dataset import Dataset, DatasetFile, DatasetLineage, DatasetType  # noqa: F401
+from app.models.script import Script  # noqa: F401
+from app.models.chat import Conversation, ChatMessage, LLMSetting  # noqa: F401
+from app.models.project import Project  # noqa: F401
+import app.config as app_config
+import app.routers.datasets as datasets_router
+import app.services.llm_service as llm_service_module
 
 
-@pytest.fixture(scope="function")
-def test_db():
-    """Create a fresh test database for each test."""
-    # Use in-memory SQLite with check_same_thread=False for multi-threaded access
+@pytest.fixture(autouse=True)
+def isolate_upload_and_secret_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Redirect UPLOAD_DIR and SECRET_KEY_FILE to tmp_path so tests never touch workspace files."""
+    isolated_upload_dir = tmp_path / "uploads"
+    isolated_upload_dir.mkdir(parents=True, exist_ok=True)
+    isolated_secret_key = tmp_path / ".icde_secret_key"
+
+    monkeypatch.setattr(app_config, "UPLOAD_DIR", isolated_upload_dir)
+    monkeypatch.setattr(datasets_router, "UPLOAD_DIR", isolated_upload_dir)
+    monkeypatch.setattr(app_config, "SECRET_KEY_FILE", isolated_secret_key)
+    monkeypatch.setattr(llm_service_module, "SECRET_KEY_FILE", isolated_secret_key)
+    monkeypatch.delenv("LLM_SECRET_KEY_FILE", raising=False)
+
+    yield {
+        "upload_dir": isolated_upload_dir,
+        "secret_key_file": isolated_secret_key,
+    }
+
+
+def _create_memory_session():
     engine = create_engine(
         "sqlite:///:memory:",
         echo=False,
@@ -27,12 +50,24 @@ def test_db():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
-
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    session = TestSession()
+    return engine, TestSession()
 
+
+@pytest.fixture(scope="function")
+def test_db():
+    """Create a fresh test database for each test with all models registered."""
+    engine, session = _create_memory_session()
     yield session
+    session.close()
+    Base.metadata.drop_all(bind=engine)
 
+
+@pytest.fixture(scope="function")
+def test_db_with_llm():
+    """Create a test database with LLM models registered (Conversation, ChatMessage, LLMSetting)."""
+    engine, session = _create_memory_session()
+    yield session
     session.close()
     Base.metadata.drop_all(bind=engine)
 

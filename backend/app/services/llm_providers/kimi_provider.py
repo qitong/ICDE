@@ -121,12 +121,15 @@ class KimiProvider(BaseLLMProvider):
             raise
 
     async def validate_api_key(self) -> bool:
-        """Validate the Kimi API key by making a simple request."""
+        """Validate the Kimi API key by making a minimal chat completion request."""
         try:
             client = self._get_client()
-            # List models to validate the API key
-            await client.models.list()
+            await client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": "Hi"}],
+                max_tokens=5,
+            )
             return True
         except Exception as e:
             logger.error(f"Kimi API key validation failed: {e}")
-            return False
+            raise
