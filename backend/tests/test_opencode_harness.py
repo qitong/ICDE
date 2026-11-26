@@ -8,16 +8,20 @@ Zero external API keys or patient files required.
 
 from __future__ import annotations
 
+import io
 import json
+import os
+import sys
+import textwrap
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.database import get_db
 from app.harness.opencode_adapter import HttpOpenCodeTransport, OpenCodeHarnessAdapter
-from app.harness.protocol import HarnessTurnRequest
+from app.harness.protocol import ApprovalDecisionRequest, HarnessTurnRequest
 from app.harness.workspace_guard import WorkspaceGuard
 from app.main import app
 from app.mcp.icde_mcp_server import ICDEMCPServer
@@ -95,13 +99,16 @@ def harness_fixture(test_db, test_upload_dir, sample_csv_content):
     test_db.add(raw_file)
     test_db.commit()
 
-    return {
-        "db": test_db,
-        "upload_dir": test_upload_dir,
-        "project": project,
-        "dataset": raw_ds,
-        "raw_csv": raw_csv,
-    }
+    try:
+        yield {
+            "db": test_db,
+            "upload_dir": test_upload_dir,
+            "project": project,
+            "dataset": raw_ds,
+            "raw_csv": raw_csv,
+        }
+    finally:
+        WorkspaceGuard.unlock_for_deletion(raw_ds)
 
 
 def _build_mock_opencode_http_transport(
@@ -556,7 +563,276 @@ class TestHarnessFastAPIEndToEnd:
             assert mcp_http_resp.status_code == 200
             assert len(mcp_http_resp.json()["result"]["tools"]) == 6
 
-            # 6. Verify RAW source file remained byte-for-byte untouched throughout
+            # 6. Verify RAW source file remained byte-for-byte untouched AND locked 0o444 / 0o555
             assert WorkspaceGuard.compute_sha256(harness_fixture["raw_csv"]) == sha_before
+            assert (harness_fixture["raw_csv"].stat().st_mode & 0o777) == 0o444
+            assert (harness_fixture["raw_csv"].parent.stat().st_mode & 0o777) == 0o555
         finally:
             app.dependency_overrides.clear()
+
+    def test_upload_locks_raw_0o555_0o444_and_delete_dataset_succeeds(
+        self, test_db, sample_csv_content
+    ):
+        """Verify RAW dataset upload enforces 0o555 dir + 0o444 file and DELETE unlocks cleanly."""
+        app.dependency_overrides[get_db] = lambda: test_db
+        try:
+            client = TestClient(app)
+            ds_resp = client.post("/api/datasets", json={"name": "Locked_RAW_Study"})
+            assert ds_resp.status_code == 201
+            ds_id = ds_resp.json()["id"]
+
+            upload_resp = client.post(
+                f"/api/datasets/{ds_id}/files",
+                files={"files": ("adsl.csv", io.BytesIO(sample_csv_content.encode()), "text/csv")},
+            )
+            assert upload_resp.status_code == 200
+
+            ds_row = test_db.query(Dataset).filter(Dataset.id == ds_id).first()
+            folder_path = Path(ds_row.folder_path)
+            file_path = Path(ds_row.files[0].file_path)
+
+            assert (folder_path.stat().st_mode & 0o777) == 0o555
+            assert (file_path.stat().st_mode & 0o777) == 0o444
+            if os.geteuid() != 0:
+                with pytest.raises(PermissionError):
+                    file_path.unlink()
+
+            del_resp = client.delete(f"/api/datasets/{ds_id}")
+            assert del_resp.status_code == 204
+            assert not folder_path.exists()
+        finally:
+            app.dependency_overrides.clear()
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _write_fake_opencode_binary(tmp_path: Path, behavior: str) -> Tuple[Path, Path, Path]:
+    """
+    Create a real executable mock `opencode` CLI script supporting `serve --hostname ... --port ...`
+    to test `local_binary` subprocess lifecycle and permission forwarding without external deps.
+    """
+    bin_path = tmp_path / f"fake_opencode_{behavior}"
+    meta_path = tmp_path / f"server_meta_{behavior}.json"
+    perm_path = tmp_path / f"perm_receipts_{behavior}.json"
+
+    script_source = f"""#!{sys.executable}
+import json
+import os
+import signal
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+BEHAVIOR = {behavior!r}
+META_PATH = {str(meta_path)!r}
+PERM_PATH = {str(perm_path)!r}
+
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+
+with open(META_PATH, "w", encoding="utf-8") as f:
+    json.dump({{"pid": os.getpid(), "cwd": os.getcwd(), "port": port}}, f)
+
+event_gate = threading.Event()
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *a):
+        pass
+
+    def _send_json(self, code, obj):
+        raw = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        if self.path == "/session":
+            self._send_json(200, [])
+            return
+        if self.path == "/event":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(b'data: {{"type": "server.connected", "properties": {{}}}}\\n\\n')
+            self.wfile.flush()
+            event_gate.wait(timeout=5.0)
+            frames = []
+            if BEHAVIOR == "ask_permission":
+                frames.append({{
+                    "type": "permission.asked",
+                    "properties": {{
+                        "id": "perm_live_42",
+                        "sessionID": "ses_subproc_1",
+                        "permission": "bash",
+                        "title": "Execute R cohort check",
+                        "patterns": ["Rscript check.R"],
+                    }},
+                }})
+            frames.append({{
+                "type": "message.part.updated",
+                "properties": {{
+                    "part": {{"id": "p1", "sessionID": "ses_subproc_1", "type": "text"}},
+                    "delta": "Subprocess turn complete.",
+                }},
+            }})
+            frames.append({{"type": "session.idle", "properties": {{"sessionID": "ses_subproc_1"}}}})
+            for fr in frames:
+                self.wfile.write(("data: " + json.dumps(fr) + "\\n\\n").encode("utf-8"))
+                self.wfile.flush()
+            return
+        self._send_json(404, {{"error": "not found"}})
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {{}}
+        if self.path == "/session":
+            self._send_json(200, {{"id": "ses_subproc_1"}})
+            return
+        if self.path.endswith("/prompt_async") or self.path.endswith("/message"):
+            if BEHAVIOR == "fail_prompt":
+                self._send_json(500, {{"error": "simulated prompt failure"}})
+                return
+            event_gate.set()
+            self._send_json(200, {{"accepted": True}})
+            return
+        if "/permissions/" in self.path:
+            receipts = []
+            if os.path.exists(PERM_PATH):
+                with open(PERM_PATH, "r", encoding="utf-8") as rf:
+                    receipts = json.load(rf)
+            receipts.append({{"path": self.path, "body": body}})
+            with open(PERM_PATH, "w", encoding="utf-8") as wf:
+                json.dump(receipts, wf)
+            self._send_json(200, {{"forwarded": True}})
+            return
+        self._send_json(404, {{"error": "not found"}})
+
+server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+server.serve_forever()
+"""
+    bin_path.write_text(textwrap.dedent(script_source), encoding="utf-8")
+    bin_path.chmod(0o755)
+    return bin_path, meta_path, perm_path
+
+
+class TestLocalBinarySubprocessLifecycleAndPermissions:
+    """Regression tests for [BLOCKING-2]: zero subprocess leaks & live `local_binary` permission forwarding."""
+
+    @pytest.mark.asyncio
+    async def test_local_binary_normal_turn_terminates_subprocess_and_cleans_workspace(
+        self, harness_fixture, tmp_path: Path
+    ):
+        bin_path, meta_path, _ = _write_fake_opencode_binary(tmp_path, "normal")
+        adapter = OpenCodeHarnessAdapter(
+            binary_path=str(bin_path),
+            database_url="sqlite:///:memory:",
+            upload_dir=harness_fixture["upload_dir"],
+        )
+
+        result = await adapter.run_turn(
+            HarnessTurnRequest(
+                message="Check @STUDY-R1/ADSL",
+                provider="openai",
+                project_id=harness_fixture["project"].id,
+            ),
+            harness_fixture["db"],
+        )
+
+        assert "Subprocess turn complete." in result.content
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert not _pid_is_running(meta["pid"])
+        assert not Path(meta["cwd"]).exists()
+        assert adapter._active_leases == {}
+
+    @pytest.mark.asyncio
+    async def test_local_binary_stream_exception_terminates_subprocess_without_leak(
+        self, harness_fixture, tmp_path: Path
+    ):
+        bin_path, meta_path, _ = _write_fake_opencode_binary(tmp_path, "fail_prompt")
+        adapter = OpenCodeHarnessAdapter(
+            binary_path=str(bin_path),
+            database_url="sqlite:///:memory:",
+            upload_dir=harness_fixture["upload_dir"],
+        )
+
+        result = await adapter.run_turn(
+            HarnessTurnRequest(
+                message="Trigger failure",
+                provider="openai",
+                project_id=harness_fixture["project"].id,
+            ),
+            harness_fixture["db"],
+        )
+
+        assert any(ev.type == "error" for ev in result.events)
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert not _pid_is_running(meta["pid"])
+        assert not Path(meta["cwd"]).exists()
+        assert adapter._active_leases == {}
+
+    @pytest.mark.asyncio
+    async def test_local_binary_permission_asked_retains_lease_forwards_decision_then_cleans_up(
+        self, harness_fixture, tmp_path: Path
+    ):
+        bin_path, meta_path, perm_path = _write_fake_opencode_binary(tmp_path, "ask_permission")
+        adapter = OpenCodeHarnessAdapter(
+            binary_path=str(bin_path),
+            database_url="sqlite:///:memory:",
+            upload_dir=harness_fixture["upload_dir"],
+        )
+
+        try:
+            result = await adapter.run_turn(
+                HarnessTurnRequest(
+                    message="Run R script requiring permission",
+                    provider="openai",
+                    project_id=harness_fixture["project"].id,
+                ),
+                harness_fixture["db"],
+            )
+
+            assert len(result.pending_approvals) == 1
+            checkpoint = result.pending_approvals[0]
+            assert checkpoint.permission_id == "perm_live_42"
+
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            # While permission is pending, daemon and workspace remain alive in bounded lease
+            assert "ses_subproc_1" in adapter._active_leases
+            assert _pid_is_running(meta["pid"])
+            assert Path(meta["cwd"]).exists()
+
+            resolved = await adapter.resolve_approval(
+                checkpoint.approval_id,
+                ApprovalDecisionRequest(decision="approved", selected_option="Approve"),
+                harness_fixture["db"],
+            )
+            assert resolved.status == "approved"
+
+            # Permission decision reached the live local_binary OpenCode HTTP server!
+            receipts = json.loads(perm_path.read_text(encoding="utf-8"))
+            assert receipts == [
+                {
+                    "path": "/session/ses_subproc_1/permissions/perm_live_42",
+                    "body": {"response": "allow", "remember": False},
+                }
+            ]
+
+            # Once resolved, lease is released, subprocess reaped, and workspace cleaned up!
+            assert adapter._active_leases == {}
+            assert not _pid_is_running(meta["pid"])
+            assert not Path(meta["cwd"]).exists()
+        finally:
+            await adapter.close_all_leases()

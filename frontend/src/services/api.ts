@@ -1,3 +1,4 @@
+import type { ApprovalItem, HarnessStatus } from '../types';
 import type {
   Dataset,
   DatasetFile,
@@ -18,8 +19,7 @@ import type {
   LLMSettings,
   LLMSettingsUpdate,
   ApiKeyValidation,
-  HarnessStatus,
-  ApprovalItem,
+  MentionablesResponse,
 } from '../types';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -437,28 +437,10 @@ export async function* streamChatMessage(
 
 // ============== Mentionable Items ==============
 
-interface MentionableApiItem {
-  id: string;
-  name: string;
-  path: string;
-  display_name?: string;
-  row_count?: number;
-  column_count?: number;
-  study_name?: string;
-  version_name?: string;
-  file_type?: string;
-  description?: string;
-  language?: string;
-}
-
 export async function getMentionableItems(
   projectId?: string,
   query?: string
-): Promise<{
-  datasets: MentionableApiItem[];
-  files: MentionableApiItem[];
-  scripts: MentionableApiItem[];
-}> {
+): Promise<MentionablesResponse> {
   const params = new URLSearchParams();
   if (projectId) params.append('project_id', projectId);
   if (query) params.append('query', query);
@@ -466,11 +448,7 @@ export async function getMentionableItems(
   const response = await fetch(
     `${API_BASE_URL}/api/chat/mentionables?${params}`
   );
-  return handleResponse<{
-    datasets: MentionableApiItem[];
-    files: MentionableApiItem[];
-    scripts: MentionableApiItem[];
-  }>(response);
+  return handleResponse<MentionablesResponse>(response);
 }
 
 export { ApiError };

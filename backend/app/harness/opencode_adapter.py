@@ -4,10 +4,12 @@ Async OpenCode Headless Server (`opencode serve`) client & `ICDEHarnessAdapter` 
 Supports:
 1. Attaching to an external `OPENCODE_SERVER_URL` via `httpx` async REST + SSE (`/session`,
    `/session/{id}/message`, `/session/{id}/prompt_async`, `/event`, `/session/{id}/permissions/{permId}`).
-2. Spawning an ephemeral `opencode serve` subprocess when the `opencode` binary is available on PATH.
+2. Spawning an ephemeral `opencode serve` subprocess when the `opencode` binary is available on PATH,
+   reliably terminating it via `close()` or retaining a bounded session lease while an OpenCode
+   `permission.asked` checkpoint awaits PI approval.
 3. Full dependency-injected `OpenCodeTransport` / `httpx.AsyncBaseTransport` support for 100%
    deterministic offline testing in CI.
-4. Pre/post-turn `WorkspaceGuard` SHA-256 verification and `Conversation`/`ChatMessage` persistence.
+4. Pre-turn OS `0o444`/`0o555` locking + cryptographic SHA-256 verification via `WorkspaceGuard`.
 """
 
 from __future__ import annotations
@@ -19,7 +21,9 @@ import logging
 import os
 import shutil
 import socket
+import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
 
@@ -27,9 +31,8 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import DATABASE_URL, UPLOAD_DIR
-from app.mcp.icde_mcp_server import ICDEMCPServer
+from app.mcp.tools import TOOL_DEFINITIONS
 from app.models.chat import ChatMessage, Conversation, LLMSetting
-from app.services.llm_service import LLMService
 
 from .approval_store import ApprovalStore
 from .events import ApprovalCheckpoint, HarnessEvent
@@ -44,6 +47,10 @@ from .protocol import (
 from .workspace_guard import ReadOnlyDatasetViolationError, WorkspaceGuard
 
 logger = logging.getLogger(__name__)
+
+MCP_SERVER_NAME = "icde-mcp"
+MAX_ACTIVE_PERMISSION_LEASES = 16
+PERMISSION_LEASE_TTL_SECONDS = 600.0
 
 
 @runtime_checkable
@@ -83,6 +90,20 @@ class OpenCodeTransport(Protocol):
         remember: bool = False,
     ) -> Dict[str, Any]:
         """Forward a permission approval/rejection (`allow` | `always` | `reject`) to OpenCode."""
+
+    async def close(self) -> None:
+        """Release any underlying subprocess or network resources owned by this transport."""
+
+
+@dataclass
+class _ActiveSessionLease:
+    """Retains a live `local_binary` transport + workspace bundle while permissions are pending."""
+
+    session_id: str
+    transport: OpenCodeTransport
+    bundle: Optional[OpenCodeRuntimeBundle]
+    pending_permission_ids: Set[str] = field(default_factory=set)
+    created_monotonic: float = field(default_factory=time.monotonic)
 
 
 def _find_free_port() -> int:
@@ -154,6 +175,7 @@ class HttpOpenCodeTransport:
         self._timeout = timeout
         self._use_global_event_stream = use_global_event_stream
         self._proc: Optional[asyncio.subprocess.Process] = None
+        self._owns_server_process: bool = False
 
     def _make_client(self, base_url: str, directory: Optional[str] = None) -> httpx.AsyncClient:
         headers = _build_auth_headers()
@@ -166,9 +188,15 @@ class HttpOpenCodeTransport:
             timeout=httpx.Timeout(self._timeout),
         )
 
-    async def _ensure_server(self, directory: str, env: Dict[str, str]) -> Tuple[str, Optional[asyncio.subprocess.Process]]:
+    async def _ensure_server(self, directory: str, env: Dict[str, str]) -> str:
+        if self._owns_server_process and self._proc is not None and self._proc.returncode is not None:
+            # Previously spawned subprocess died; reset before respawning
+            self._proc = None
+            self.base_url = None
+            self._owns_server_process = False
+
         if self.base_url:
-            return self.base_url, None
+            return self.base_url
         if not self.binary_path:
             raise RuntimeError("Neither OPENCODE_SERVER_URL nor 'opencode' binary is available.")
 
@@ -187,25 +215,53 @@ class HttpOpenCodeTransport:
             stderr=asyncio.subprocess.PIPE,
         )
         url = f"http://127.0.0.1:{port}"
-        # Wait up to 10 seconds for `opencode serve` to listen
-        async with self._make_client(url, directory=directory) as client:
-            for _ in range(40):
-                if proc.returncode is not None:
-                    stderr_bytes = await proc.stderr.read() if proc.stderr else b""
-                    raise RuntimeError(
-                        f"'opencode serve' exited prematurely (code={proc.returncode}): "
-                        f"{stderr_bytes.decode('utf-8', errors='replace')[:300]}"
-                    )
-                try:
-                    resp = await client.get("/session")
-                    if resp.status_code < 500:
-                        return url, proc
-                except httpx.HTTPError:
-                    pass
-                await asyncio.sleep(0.25)
+        self._proc = proc
+        self._owns_server_process = True
+        self.base_url = url
 
-        proc.terminate()
-        raise RuntimeError("Timed out waiting for 'opencode serve' HTTP server to start.")
+        try:
+            # Wait up to 10 seconds for `opencode serve` to listen
+            async with self._make_client(url, directory=directory) as client:
+                for _ in range(40):
+                    if proc.returncode is not None:
+                        stderr_bytes = await proc.stderr.read() if proc.stderr else b""
+                        raise RuntimeError(
+                            f"'opencode serve' exited prematurely (code={proc.returncode}): "
+                            f"{stderr_bytes.decode('utf-8', errors='replace')[:300]}"
+                        )
+                    try:
+                        resp = await client.get("/session")
+                        if resp.status_code < 500:
+                            return url
+                    except httpx.HTTPError:
+                        pass
+                    await asyncio.sleep(0.25)
+
+            raise RuntimeError("Timed out waiting for 'opencode serve' HTTP server to start.")
+        except Exception:
+            await self.close()
+            raise
+
+    async def close(self) -> None:
+        """Terminate and reap any owned `opencode serve` child process."""
+        proc = self._proc
+        self._proc = None
+        was_owned = self._owns_server_process
+        self._owns_server_process = False
+        if was_owned:
+            self.base_url = None
+
+        if proc is not None:
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        pass
 
     async def check_health(self) -> bool:
         if self.base_url:
@@ -224,11 +280,7 @@ class HttpOpenCodeTransport:
         directory: str,
         env: Dict[str, str],
     ) -> str:
-        url, proc = await self._ensure_server(directory, env)
-        if proc is not None:
-            self._proc = proc
-            self.base_url = url
-
+        url = await self._ensure_server(directory, env)
         async with self._make_client(url, directory=directory) as client:
             resp = await client.post("/session", json={"title": title})
             resp.raise_for_status()
@@ -248,67 +300,59 @@ class HttpOpenCodeTransport:
         directory: str,
         env: Dict[str, str],
     ) -> AsyncIterator[Dict[str, Any]]:
-        url, proc = await self._ensure_server(directory, env)
-        try:
-            payload = {
-                "model": {
-                    "providerID": provider_id,
-                    "modelID": model_id,
-                },
-                "parts": [
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    }
-                ],
-            }
+        url = await self._ensure_server(directory, env)
+        payload = {
+            "model": {
+                "providerID": provider_id,
+                "modelID": model_id,
+            },
+            "parts": [
+                {
+                    "type": "text",
+                    "text": prompt,
+                }
+            ],
+        }
 
-            if self._use_global_event_stream:
-                async for ev in self._stream_via_global_event_bus(
-                    url=url,
-                    session_id=session_id,
-                    payload=payload,
-                    directory=directory,
-                ):
-                    yield ev
-                return
+        if self._use_global_event_stream:
+            async for ev in self._stream_via_global_event_bus(
+                url=url,
+                session_id=session_id,
+                payload=payload,
+                directory=directory,
+            ):
+                yield ev
+            return
 
-            async with self._make_client(url, directory=directory) as client:
-                async with client.stream(
-                    "POST",
-                    f"/session/{session_id}/message",
-                    json=payload,
-                    headers={"Accept": "text/event-stream, application/json"},
-                ) as resp:
-                    resp.raise_for_status()
-                    content_type = resp.headers.get("content-type", "")
-                    if "text/event-stream" in content_type:
-                        async for sse_event in _iter_sse_json(resp):
-                            yield sse_event
-                    else:
-                        raw_bytes = await resp.aread()
-                        body = json.loads(raw_bytes.decode("utf-8"))
-                        if isinstance(body, dict):
-                            if "events" in body and isinstance(body["events"], list):
-                                for item in body["events"]:
-                                    if isinstance(item, dict):
-                                        yield item
-                            elif "parts" in body and isinstance(body["parts"], list):
-                                for part in body["parts"]:
-                                    if isinstance(part, dict):
-                                        yield {
-                                            "type": "message.part.updated",
-                                            "properties": {"part": part},
-                                        }
-                            else:
-                                yield body
-        finally:
-            if proc is not None and proc.returncode is None:
-                proc.terminate()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=3.0)
-                except asyncio.TimeoutError:
-                    proc.kill()
+        async with self._make_client(url, directory=directory) as client:
+            async with client.stream(
+                "POST",
+                f"/session/{session_id}/message",
+                json=payload,
+                headers={"Accept": "text/event-stream, application/json"},
+            ) as resp:
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                if "text/event-stream" in content_type:
+                    async for sse_event in _iter_sse_json(resp):
+                        yield sse_event
+                else:
+                    raw_bytes = await resp.aread()
+                    body = json.loads(raw_bytes.decode("utf-8"))
+                    if isinstance(body, dict):
+                        if "events" in body and isinstance(body["events"], list):
+                            for item in body["events"]:
+                                if isinstance(item, dict):
+                                    yield item
+                        elif "parts" in body and isinstance(body["parts"], list):
+                            for part in body["parts"]:
+                                if isinstance(part, dict):
+                                    yield {
+                                        "type": "message.part.updated",
+                                        "properties": {"part": part},
+                                    }
+                        else:
+                            yield body
 
     async def _stream_via_global_event_bus(
         self,
@@ -414,6 +458,7 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
         self._database_url = database_url
         self._upload_dir = upload_dir
         self._mcp_http_url = mcp_http_url
+        self._active_leases: Dict[str, _ActiveSessionLease] = {}
 
     def _resolve_runtime_target(self) -> Tuple[str, Optional[str], Optional[str], Optional[OpenCodeTransport]]:
         """
@@ -439,6 +484,48 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
             return "local_binary", None, binary, transport
 
         return "unavailable", None, None, None
+
+    @staticmethod
+    async def _close_transport(transport: Optional[OpenCodeTransport]) -> None:
+        if transport is None:
+            return
+        close_fn = getattr(transport, "close", None)
+        if callable(close_fn):
+            result = close_fn()
+            if asyncio.iscoroutine(result):
+                await result
+
+    async def _release_lease(self, session_id: str) -> None:
+        lease = self._active_leases.pop(session_id, None)
+        if lease is None:
+            return
+        try:
+            await self._close_transport(lease.transport)
+        finally:
+            if lease.bundle is not None:
+                lease.bundle.cleanup()
+
+    async def _prune_leases(self) -> None:
+        now = time.monotonic()
+        expired = [
+            sid
+            for sid, lease in self._active_leases.items()
+            if (now - lease.created_monotonic) > PERMISSION_LEASE_TTL_SECONDS
+        ]
+        for sid in expired:
+            await self._release_lease(sid)
+
+        while len(self._active_leases) >= MAX_ACTIVE_PERMISSION_LEASES:
+            oldest_sid = min(
+                self._active_leases,
+                key=lambda k: self._active_leases[k].created_monotonic,
+            )
+            await self._release_lease(oldest_sid)
+
+    async def close_all_leases(self) -> None:
+        """Close all retained `local_binary` permission leases and clean up bundles."""
+        for sid in list(self._active_leases.keys()):
+            await self._release_lease(sid)
 
     async def health_status(self, db: Session) -> HarnessStatus:
         mode, server_url, binary_path, transport = self._resolve_runtime_target()
@@ -469,8 +556,8 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
             mode=mode,  # type: ignore[arg-type]
             server_url=server_url,
             binary_path=binary_path,
-            mcp_server=ICDEMCPServer.SERVER_NAME,
-            mcp_tools=ICDEMCPServer.list_tool_names(),
+            mcp_server=MCP_SERVER_NAME,
+            mcp_tools=[tool["name"] for tool in TOOL_DEFINITIONS],
             raw_guard_enabled=True,
             protected_raw_datasets=raw_count,
             configured_providers=configured_providers,
@@ -485,12 +572,13 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
         """
         Execute an agent turn and yield standardized `HarnessEvent` chunks.
         """
-        llm_service = LLMService(db)
+        await self._prune_leases()
         guard = WorkspaceGuard(db, workspace_root=self._upload_dir or UPLOAD_DIR)
         approval_store = ApprovalStore(db)
 
-        # 1. Pre-turn cryptographic snapshot of all RAW datasets
+        # 1. Pre-turn cryptographic snapshot AND OS-level read-only lock (0o444 files + 0o555 dirs)
         raw_snapshot = guard.snapshot_raw_files()
+        guard.lock_raw_dataset_files()
 
         # 2. Get or create Conversation + persist user & placeholder assistant messages
         conversation: Optional[Conversation] = None
@@ -560,6 +648,9 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
         )
 
         bundle: Optional[OpenCodeRuntimeBundle] = None
+        session_id: Optional[str] = None
+        pending_permission_ids: Set[str] = set()
+        retain_lease = False
         full_content_parts: List[str] = []
         seen_part_lengths: Dict[str, int] = {}
         emitted_tool_states: Set[Tuple[str, str]] = set()
@@ -600,6 +691,7 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
                     seen_part_lengths=seen_part_lengths,
                     emitted_tool_states=emitted_tool_states,
                     emitted_side_events=emitted_side_events,
+                    pending_permission_ids=pending_permission_ids,
                 ):
                     if translated.type in ("content", "text_delta") and translated.content:
                         full_content_parts.append(translated.content)
@@ -615,6 +707,18 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
                     "..." if len(request.message) > 50 else ""
                 )
             db.commit()
+
+            # Retain live subprocess + workspace bundle ONLY if an OpenCode session permission
+            # checkpoint is pending in local_binary (or owned subprocess) mode.
+            owns_proc = bool(getattr(transport, "_owns_server_process", False))
+            if session_id and pending_permission_ids and (mode == "local_binary" or owns_proc):
+                self._active_leases[session_id] = _ActiveSessionLease(
+                    session_id=session_id,
+                    transport=transport,
+                    bundle=bundle,
+                    pending_permission_ids=set(pending_permission_ids),
+                )
+                retain_lease = True
 
             yield HarnessEvent.done_event(
                 conversation_id=conversation.id,
@@ -653,8 +757,12 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
                 message_id=assistant_msg.id,
             )
         finally:
-            if bundle is not None:
-                bundle.cleanup()
+            if not retain_lease:
+                try:
+                    await self._close_transport(transport)
+                finally:
+                    if bundle is not None:
+                        bundle.cleanup()
 
     async def run_turn(
         self,
@@ -713,8 +821,12 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
         )
 
         if checkpoint.session_id and checkpoint.permission_id:
-            _, _, _, transport = self._resolve_runtime_target()
-            if transport is not None:
+            lease = self._active_leases.get(checkpoint.session_id)
+            target_transport: Optional[OpenCodeTransport] = (
+                lease.transport if lease is not None else self._resolve_runtime_target()[3]
+            )
+
+            if target_transport is not None:
                 oc_response = "allow" if decision.decision == "approved" else "reject"
                 if (
                     decision.decision == "approved"
@@ -723,7 +835,7 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
                 ):
                     oc_response = "always"
                 try:
-                    await transport.respond_permission(
+                    await target_transport.respond_permission(
                         session_id=checkpoint.session_id,
                         permission_id=checkpoint.permission_id,
                         response=oc_response,
@@ -731,6 +843,11 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
                     )
                 except Exception as exc:
                     logger.warning("Failed to forward permission resolution to OpenCode: %s", exc)
+                finally:
+                    if lease is not None:
+                        lease.pending_permission_ids.discard(checkpoint.permission_id)
+                        if not lease.pending_permission_ids:
+                            await self._release_lease(checkpoint.session_id)
 
         return checkpoint
 
@@ -765,6 +882,7 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
         seen_part_lengths: Dict[str, int],
         emitted_tool_states: Set[Tuple[str, str]],
         emitted_side_events: Set[str],
+        pending_permission_ids: Optional[Set[str]] = None,
     ) -> List[HarnessEvent]:
         """Translate OpenCode SSE / REST payloads into standardized `HarnessEvent` frames."""
         out: List[HarnessEvent] = []
@@ -847,6 +965,7 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
 
         if ev_type == "approval_required":
             appr_id = raw_event.get("approval_id")
+            perm_id_opt = raw_event.get("permission_id")
             existing_cp = approval_store.get(str(appr_id)) if appr_id else None
             if existing_cp is None:
                 existing_cp = approval_store.create(
@@ -857,8 +976,10 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
                     options=raw_event.get("options") or ["Approve", "Reject"],
                     conversation_id=conversation_id,
                     session_id=session_id,
-                    permission_id=raw_event.get("permission_id"),
+                    permission_id=str(perm_id_opt) if perm_id_opt else None,
                 )
+            if existing_cp.permission_id and pending_permission_ids is not None:
+                pending_permission_ids.add(existing_cp.permission_id)
             dedup_key = f"approval:{existing_cp.approval_id}"
             if dedup_key not in emitted_side_events:
                 emitted_side_events.add(dedup_key)
@@ -978,6 +1099,8 @@ class OpenCodeHarnessAdapter(ICDEHarnessAdapter):
                 session_id=session_id,
                 permission_id=perm_id,
             )
+            if pending_permission_ids is not None:
+                pending_permission_ids.add(perm_id)
             dedup_key = f"approval:{checkpoint.approval_id}"
             if dedup_key not in emitted_side_events:
                 emitted_side_events.add(dedup_key)

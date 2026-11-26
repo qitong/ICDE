@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 import pytest
 
@@ -69,13 +72,16 @@ def mcp_env(test_db, test_upload_dir, sample_csv_content):
     test_db.add(raw_file)
     test_db.commit()
 
-    return {
-        "db": test_db,
-        "upload_dir": test_upload_dir,
-        "project": project,
-        "raw_dataset": raw_dataset,
-        "raw_csv": raw_csv,
-    }
+    try:
+        yield {
+            "db": test_db,
+            "upload_dir": test_upload_dir,
+            "project": project,
+            "raw_dataset": raw_dataset,
+            "raw_csv": raw_csv,
+        }
+    finally:
+        WorkspaceGuard.unlock_for_deletion(raw_dataset)
 
 
 class TestICDEMCPToolsDirect:
@@ -431,3 +437,122 @@ class TestICDEMCPJsonRpcServer:
         )
         assert unknown_resp is not None
         assert unknown_resp["error"]["code"] == -32601
+
+        # 7. Explicit `"id": null` is NOT swallowed as a notification; returns -32600 error
+        null_id_resp = server.handle_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "method": "tools/list",
+            }
+        )
+        assert null_id_resp is not None
+        assert null_id_resp["id"] is None
+        assert null_id_resp["error"]["code"] == -32600
+
+    def test_derive_dataset_cleans_up_derived_dir_if_db_commit_raises(self, mcp_env, monkeypatch):
+        db = mcp_env["db"]
+        upload_dir: Path = mcp_env["upload_dir"]
+        tools = ICDEMCPTools(db, upload_dir=upload_dir)
+        script_res = tools.icde_save_script(
+            name="commit_fail_script",
+            display_name="Commit Fail",
+            description="Valid transform whose DB commit fails",
+            code="def transform(df):\n    return df.copy()\n",
+        )
+
+        existing_entries = set(upload_dir.iterdir())
+
+        def boom_commit():
+            raise RuntimeError("Simulated SQLite commit failure")
+
+        monkeypatch.setattr(db, "commit", boom_commit)
+
+        with pytest.raises(RuntimeError, match="Simulated SQLite commit failure"):
+            tools.icde_derive_dataset(
+                source_dataset_id=mcp_env["raw_dataset"].id,
+                script_id=script_res["script"]["id"],
+                output_name="ORPHAN_DERIVED",
+            )
+
+        # Ensure no orphan derived directory remained on disk
+        assert set(upload_dir.iterdir()) == existing_entries
+
+    def test_subprocess_cli_module_execution_no_circular_import(self, tmp_path: Path):
+        """
+        Blackbox regression test for [BLOCKING-1]:
+        Spawn `[sys.executable, "-m", "app.mcp.icde_mcp_server"]` in a clean subprocess
+        and verify `initialize` -> `notifications/initialized` -> `tools/list` -> `tools/call`.
+        """
+        backend_dir = Path(__file__).resolve().parents[1]
+        subproc_db_file = tmp_path / "mcp_subproc_store"
+        subproc_uploads = tmp_path / "mcp_subproc_uploads"
+        subproc_uploads.mkdir(parents=True, exist_ok=True)
+
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": str(backend_dir),
+            "DATABASE_URL": f"sqlite:///{subproc_db_file}",
+            "ICDE_DATABASE_URL": f"sqlite:///{subproc_db_file}",
+            "ICDE_UPLOAD_DIR": str(subproc_uploads),
+        }
+
+        rpc_frames = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "icde_save_script",
+                    "arguments": {
+                        "name": "subproc_fas",
+                        "display_name": "Subprocess FAS",
+                        "description": "Created over real stdio subprocess",
+                        "code": "def transform(df):\n    return df\n",
+                    },
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "icde_list_scripts",
+                    "arguments": {"query": "Subprocess"},
+                },
+            },
+        ]
+        stdin_payload = "\n".join(json.dumps(f) for f in rpc_frames) + "\n"
+
+        proc = subprocess.run(
+            [sys.executable, "-m", "app.mcp.icde_mcp_server"],
+            input=stdin_payload,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(backend_dir),
+            timeout=20,
+        )
+
+        assert proc.returncode == 0, f"icde_mcp_server crashed with stderr:\n{proc.stderr}"
+        lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+        assert [msg["id"] for msg in lines] == [1, 2, 3, 4]
+        assert lines[0]["result"]["serverInfo"]["name"] == "icde-mcp"
+        assert len(lines[1]["result"]["tools"]) == 6
+        assert lines[2]["result"]["isError"] is False
+        assert lines[3]["result"]["structuredContent"]["count"] == 1

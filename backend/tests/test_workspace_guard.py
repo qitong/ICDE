@@ -66,13 +66,16 @@ def raw_dataset_bundle(test_db, test_upload_dir, sample_csv_content):
     test_db.add(raw_file)
     test_db.commit()
 
-    return {
-        "project": project,
-        "dataset": raw_ds,
-        "file": raw_file,
-        "raw_dir": raw_dir,
-        "raw_csv": raw_csv,
-    }
+    try:
+        yield {
+            "project": project,
+            "dataset": raw_ds,
+            "file": raw_file,
+            "raw_dir": raw_dir,
+            "raw_csv": raw_csv,
+        }
+    finally:
+        WorkspaceGuard.unlock_for_deletion(raw_ds)
 
 
 class TestWorkspaceGuardPathProtection:
@@ -159,23 +162,32 @@ class TestWorkspaceGuardIntegrityAndPermissions:
         with pytest.raises(ReadOnlyDatasetViolationError, match="deleted"):
             guard.verify_raw_files_unchanged(snapshot)
 
-    def test_lock_raw_dataset_files_0o444_and_unlock_for_deletion(
+    def test_lock_raw_dataset_files_0o444_0o555_and_unlock_for_deletion(
         self, test_db, test_upload_dir, raw_dataset_bundle
     ):
         guard = WorkspaceGuard(test_db, workspace_root=test_upload_dir)
         raw_csv: Path = raw_dataset_bundle["raw_csv"]
+        raw_dir: Path = raw_dataset_bundle["raw_dir"]
 
         locked = guard.lock_raw_dataset_files()
         assert raw_csv in locked
+        assert raw_dir in locked
         assert (raw_csv.stat().st_mode & 0o777) == 0o444
+        assert (raw_dir.stat().st_mode & 0o777) == 0o555
 
         if os.geteuid() != 0:
             with pytest.raises(PermissionError):
                 raw_csv.write_text("overwrite attempt", encoding="utf-8")
+            with pytest.raises(PermissionError):
+                raw_csv.unlink()
+            with pytest.raises(PermissionError):
+                (raw_dir / "injected.csv").write_text("rogue", encoding="utf-8")
 
         unlocked = guard.unlock_for_deletion(raw_dataset_bundle["dataset"])
         assert raw_csv in unlocked
-        assert (raw_csv.stat().st_mode & 0o200) != 0
+        assert raw_dir in unlocked
+        assert (raw_dir.stat().st_mode & 0o777) == 0o755
+        assert (raw_csv.stat().st_mode & 0o777) == 0o644
 
 
 class TestOpenCodeConfigBuilder:
@@ -285,8 +297,9 @@ class TestOpenCodeConfigBuilder:
                 assert provider_block["npm"] == "@ai-sdk/openai-compatible"
                 assert provider_block["options"]["baseURL"] == DEFAULT_KIMI_BASE_URL
 
-            # Verify icde-mcp server registration & RAW deny permissions
+            # Verify icde-mcp server registration, bash default "ask", & RAW deny permissions
             assert "icde-mcp" in parsed_cfg["mcp"]
+            assert parsed_cfg["permission"]["bash"]["*"] == "ask"
             raw_dir_resolved = str(raw_dataset_bundle["raw_dir"].resolve())
             assert parsed_cfg["permission"]["edit"][raw_dir_resolved] == "deny"
             assert parsed_cfg["permission"]["edit"][f"{raw_dir_resolved}/**"] == "deny"

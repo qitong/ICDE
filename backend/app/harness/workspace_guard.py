@@ -253,57 +253,109 @@ class WorkspaceGuard:
 
     def lock_raw_dataset_files(self, dataset_id: Optional[str] = None) -> List[Path]:
         """
-        Apply OS-level read-only permissions (`0o444`) to `RAW` dataset files.
+        Apply OS-level read-only permissions (`0o444` on files and `0o555` on directories)
+        to `DatasetType.RAW` datasets so files can neither be modified nor unlinked/renamed.
         """
+        file_mode = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH  # 0o444
+        dir_mode = (
+            stat.S_IRUSR
+            | stat.S_IXUSR
+            | stat.S_IRGRP
+            | stat.S_IXGRP
+            | stat.S_IROTH
+            | stat.S_IXOTH
+        )  # 0o555
+
         locked: List[Path] = []
         datasets = self.list_raw_datasets()
         for ds in datasets:
             if dataset_id is not None and ds.id != dataset_id:
                 continue
 
-            paths: Set[Path] = set()
+            file_paths: Set[Path] = set()
+            dir_paths: List[Path] = []
+
             if ds.folder_path:
                 folder = Path(ds.folder_path).expanduser()
                 if folder.exists() and folder.is_dir():
-                    for child in folder.rglob("*"):
-                        if child.is_file():
-                            paths.add(child)
+                    for root_str, subdirs, files in os.walk(folder, topdown=False):
+                        root_path = Path(root_str)
+                        for fname in files:
+                            fpath = root_path / fname
+                            if fpath.is_file() and not fpath.is_symlink():
+                                file_paths.add(fpath)
+                        for dname in subdirs:
+                            dpath = root_path / dname
+                            if dpath.is_dir() and not dpath.is_symlink():
+                                dir_paths.append(dpath)
+                    # Never lock the shared workspace_root itself if misconfigured as folder_path
+                    if self.workspace_root is None or folder.resolve() != self.workspace_root:
+                        dir_paths.append(folder)
 
             for ds_file in ds.files:
                 if ds_file.file_path:
                     fpath = Path(ds_file.file_path).expanduser()
-                    if fpath.exists() and fpath.is_file():
-                        paths.add(fpath)
+                    if fpath.exists() and fpath.is_file() and not fpath.is_symlink():
+                        file_paths.add(fpath)
 
-            for fpath in sorted(paths):
-                os.chmod(fpath, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)  # 0o444
+            for fpath in sorted(file_paths):
+                os.chmod(fpath, file_mode)
                 locked.append(fpath)
+
+            seen_dirs: Set[str] = set()
+            for dpath in dir_paths:
+                dkey = str(dpath.resolve(strict=False))
+                if dkey not in seen_dirs:
+                    seen_dirs.add(dkey)
+                    os.chmod(dpath, dir_mode)
+                    locked.append(dpath)
 
         return locked
 
     @staticmethod
     def unlock_for_deletion(dataset: Dataset) -> List[Path]:
         """
-        Restore owner write permissions (`0o644` / `0o755`) strictly prior to explicit
-        dataset deletion.
+        Restore owner write permissions (`0o755` on directories, `0o644` on files)
+        top-down strictly prior to explicit dataset deletion or test teardown.
         """
+        dir_rw_mode = (
+            stat.S_IRWXU
+            | stat.S_IRGRP
+            | stat.S_IXGRP
+            | stat.S_IROTH
+            | stat.S_IXOTH
+        )  # 0o755
+        file_rw_mode = (
+            stat.S_IRUSR
+            | stat.S_IWUSR
+            | stat.S_IRGRP
+            | stat.S_IROTH
+        )  # 0o644
+
         unlocked: List[Path] = []
         if dataset.folder_path:
             folder = Path(dataset.folder_path).expanduser()
             if folder.exists() and folder.is_dir():
-                os.chmod(folder, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-                for child in folder.rglob("*"):
-                    if child.is_dir():
-                        os.chmod(child, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP)
-                    elif child.is_file():
-                        os.chmod(child, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-                        unlocked.append(child)
+                os.chmod(folder, dir_rw_mode)
+                unlocked.append(folder)
+                for root_str, subdirs, files in os.walk(folder, topdown=True):
+                    root_path = Path(root_str)
+                    for dname in subdirs:
+                        dpath = root_path / dname
+                        if dpath.is_dir() and not dpath.is_symlink():
+                            os.chmod(dpath, dir_rw_mode)
+                            unlocked.append(dpath)
+                    for fname in files:
+                        fpath = root_path / fname
+                        if fpath.is_file() and not fpath.is_symlink():
+                            os.chmod(fpath, file_rw_mode)
+                            unlocked.append(fpath)
 
         for ds_file in dataset.files:
             if ds_file.file_path:
                 fpath = Path(ds_file.file_path).expanduser()
-                if fpath.exists() and fpath.is_file():
-                    os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                if fpath.exists() and fpath.is_file() and not fpath.is_symlink():
+                    os.chmod(fpath, file_rw_mode)
                     if fpath not in unlocked:
                         unlocked.append(fpath)
 

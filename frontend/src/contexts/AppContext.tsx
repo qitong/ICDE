@@ -410,9 +410,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
               });
             }
             const lineageTarget = state.selectedDatasetId || chunk.dataset_id;
-            if (lineageTarget && state.selectedDatasetId) {
-              void api.getDatasetLineage(state.selectedDatasetId).then((meta) => {
-                dispatch({ type: 'SET_METADATA_DATA', payload: meta });
+            if (lineageTarget) {
+              void api.getDatasetLineage(lineageTarget).then((meta) => {
+                if (!state.selectedDatasetId || state.selectedDatasetId === lineageTarget) {
+                  dispatch({ type: 'SET_METADATA_DATA', payload: meta });
+                }
               });
             }
           }

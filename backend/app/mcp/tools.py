@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import stat
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -556,24 +556,12 @@ class ICDEMCPTools:
         if not input_path.exists():
             raise ValueError(f"Source file not found on disk: {input_path}")
 
-        # 1. Snapshot all RAW files before running user/agent transformation code
+        # 1. Snapshot all RAW files and enforce OS-level read-only locks (0o444 files + 0o555 dirs)
         raw_snapshot = self.guard.snapshot_raw_files()
+        self.guard.lock_raw_dataset_files()
 
-        # Temporarily enforce 0o444 on RAW files during script execution to block in-code writes
-        saved_modes: Dict[Path, int] = {}
-        try:
-            for file_key in raw_snapshot.files:
-                rpath = Path(file_key)
-                if rpath.exists():
-                    saved_modes[rpath] = stat.S_IMODE(rpath.stat().st_mode)
-                    os.chmod(rpath, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
-
-            executor = ScriptExecutor()
-            exec_result = executor.execute(script.code, input_path)
-        finally:
-            for rpath, orig_mode in saved_modes.items():
-                if rpath.exists():
-                    os.chmod(rpath, orig_mode)
+        executor = ScriptExecutor()
+        exec_result = executor.execute(script.code, input_path)
 
         # 2. Verify zero RAW bytes or folder inventories changed during execution
         self.guard.verify_raw_files_unchanged(raw_snapshot)
@@ -651,6 +639,7 @@ class ICDEMCPTools:
             self.db.refresh(derived_file)
         except Exception:
             self.db.rollback()
+            shutil.rmtree(derived_dir, ignore_errors=True)
             raise
 
         # 5. Final cryptographic verification of RAW source datasets

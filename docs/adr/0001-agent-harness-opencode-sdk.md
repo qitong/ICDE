@@ -103,7 +103,7 @@ All streaming responses from `/api/harness/stream` (and `/api/chat/stream` when 
 
 ### 4.4 Local `icde-mcp` Server Surface
 
-`backend/app/mcp/` implements a spec-compliant MCP JSON-RPC 2.0 server (`initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`) runnable both over **stdio** (`python -m app.mcp.icde_mcp_server`) for `opencode serve` local MCP mounting, over **HTTP** (`/api/mcp/rpc`), and via direct Python invocation:
+`backend/app/mcp/` implements a spec-compliant MCP JSON-RPC 2.0 server (`initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`) runnable both over **stdio** (`python -m app.mcp.icde_mcp_server`) for `opencode serve` local MCP mounting, over **HTTP** (`POST /api/harness/mcp`), and via direct Python invocation:
 
 - `icde_list_datasets(project_id?)`: Enumerates datasets, study/version hierarchy, `RAW`/`DERIVED` type, and row/column counts.
 - `icde_inspect_dataset(dataset_id)`: Returns parsed column schemas (`name`, `data_type`, `non_null_count`, `unique_count`, `sample_values`) and upstream/downstream lineage without mutating data.
@@ -118,7 +118,7 @@ All streaming responses from `/api/harness/stream` (and `/api/chat/stream` when 
 
 1. **Canonical Path & Traversal Guard**: Resolves symlinks and `..` segments via `Path.resolve()`. Any attempted write, overwrite, move, or delete targeting a `RAW` dataset directory or file raises `ReadOnlyDatasetViolationError` before I/O occurs.
 2. **OpenCode Permission Rules**: Ephemeral `opencode.json` configures `permission` rules denying `edit`/`write` on `RAW` dataset globs and gating shell mutations while allowing `icde-mcp` read/derivation tools.
-3. **OS File Mode Lock (`0o444`)**: `lock_raw_dataset_files()` strips write bits (`r--r--r--`) on `RAW` files inside isolated sandboxes; `unlock_for_deletion()` restores `0o644` exclusively for explicit user-initiated dataset deletion.
+3. **OS File & Directory Mode Lock (`0o444` / `0o555`)**: `lock_raw_dataset_files()` strips write bits (`0o444` on files, `0o555` on directories) on `RAW` datasets before agent turns and on upload; `unlock_for_deletion()` restores `0o755` / `0o644` exclusively for explicit user-initiated dataset deletion.
 4. **Cryptographic Pre/Post Turn Audit**: `snapshot_raw_files()` records SHA-256 digests + byte sizes of all `RAW` files prior to an agent turn or derivation; `verify_raw_files_unchanged()` asserts zero byte drift afterward, raising `ReadOnlyDatasetViolationError` on any tampering or deletion.
 
 ---

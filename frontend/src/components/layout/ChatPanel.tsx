@@ -43,7 +43,7 @@ export function ChatPanel() {
               <span className="capitalize">{state.currentProvider}</span>
               {harnessStatus?.raw_guard_enabled && (
                 <span
-                  className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded bg-surface border border-border text-muted"
+                  className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-muted"
                   title={
                     harnessStatus.available
                       ? `OpenCode Harness active (${harnessStatus.mcp_tools.length} MCP tools) · RAW datasets read-only`

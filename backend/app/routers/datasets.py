@@ -79,6 +79,11 @@ async def upload_files(
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
+    # Temporarily restore folder write bit when appending new uploaded files to an existing RAW dataset
+    dataset_folder = Path(dataset.folder_path)
+    if dataset.type == DatasetType.RAW and dataset_folder.exists():
+        os.chmod(dataset_folder, 0o755)
+
     uploaded_files: List[DatasetFile] = []
 
     for file in files:
@@ -140,6 +145,10 @@ async def upload_files(
 
     for f in uploaded_files:
         db.refresh(f)
+
+    if dataset.type == DatasetType.RAW:
+        from ..harness.workspace_guard import WorkspaceGuard
+        WorkspaceGuard(db, workspace_root=UPLOAD_DIR).lock_raw_dataset_files(dataset.id)
 
     return uploaded_files
 

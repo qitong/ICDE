@@ -89,8 +89,9 @@ class ICDEMCPServer:
             }
 
         method = request.get("method")
+        has_id = "id" in request
         req_id = request.get("id")
-        is_notification = "id" not in request or req_id is None
+        is_notification = not has_id
         params = request.get("params") or {}
 
         if not isinstance(method, str):
@@ -100,11 +101,19 @@ class ICDEMCPServer:
                 "error": {"code": -32600, "message": "Missing method name"},
             }
 
-        # Notifications produce no response frame
-        if is_notification or method.startswith("notifications/"):
+        # Notifications (requests omitting the "id" member) produce no response frame
+        if is_notification:
             if method == "notifications/initialized":
                 self._initialized = True
             return None
+
+        # Explicit `"id": null` is not a notification in JSON-RPC 2.0
+        if req_id is None:
+            return {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Invalid JSON-RPC 2.0 request: id must not be null"},
+            }
 
         if method == "initialize":
             self._initialized = True

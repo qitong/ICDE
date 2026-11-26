@@ -203,7 +203,7 @@ class OpenCodeConfigBuilder:
 
         edit_permissions: Dict[str, str] = {"*": "allow"}
         bash_permissions: Dict[str, str] = {
-            "*": "allow",
+            "*": "ask",
             "rm *": "deny",
             "mv *": "deny",
             "chmod *": "deny",
